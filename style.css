@@ -1,299 +1,89 @@
 :root{
-  --bg: #0f0f12;
-  --panel: #15151b;
-  --panel2: #1b1b22;
-  --text: #e6e6ea;
-  --muted: #a7a7b3;
-  --line: #2a2a36;
-  --btn: #222233;
-  --btnHover: #2a2a40;
+  --bg:#0b0b0d;
+  --panel:#101014;
+  --line:#22242a;
+  --text:#e7e7ea;
+  --muted:#a6a6b0;
+  --btn:#14151a;
+  --btn2:#1a1c22;
+  --focus:#79a7ff;
 }
 
-*{ box-sizing: border-box; }
-html, body{ height:100%; }
-body{
-  margin:0;
-  background: var(--bg);
-  color: var(--text);
-  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
+*{box-sizing:border-box;}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;}
+
+#hud{
+  padding:12px 14px;
+  border-bottom:1px solid var(--line);
+}
+#hudTitle{font-weight:800;letter-spacing:0.02em;}
+#hudMeta{margin-top:6px;color:var(--muted);font-size:12px;line-height:1.3;}
+#hudLast{margin-top:6px;font-size:13px;}
+
+#layout{
+  display:grid;
+  grid-template-columns: 1fr 320px;
+  height: calc(100% - 86px);
 }
 
-#app{
-  height: 100vh;
-  display: flex;
-}
+#canvasWrap{position:relative;}
+#c{display:block;width:100%;height:100%;}
 
-#main{
-  position: relative;
-  flex: 1;
-  min-width: 0;
-}
-
-#board{
-  width: 100%;
-  height: 100%;
-  display: block;
-  background: #0b0b0e;
-}
-
-#statusLine{
-  position: absolute;
-  top: 10px;
-  left: 10px;
-  padding: 8px 10px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-  font-size: 12px;
-  color: var(--text);
-  background: rgba(10,10,14,0.70);
-  border: 1px solid rgba(255,255,255,0.08);
-  border-radius: 8px;
-  pointer-events: none;
-  user-select: none;
-  max-width: calc(100% - 20px);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-#sidebar{
-  width: 340px;
-  background: var(--panel);
-  border-left: 1px solid var(--line);
-  padding: 14px;
-  overflow-y: auto;
-}
-
-.brand{
-  padding: 10px 10px 14px 10px;
-  border-bottom: 1px solid var(--line);
-  margin-bottom: 14px;
-}
-.title{
-  font-weight: 700;
-  letter-spacing: 0.3px;
-  font-size: 18px;
-}
-.subtitle{
-  margin-top: 4px;
-  color: var(--muted);
-  font-size: 12px;
+#side{
+  border-left:1px solid var(--line);
+  padding:12px;
+  overflow:auto;
 }
 
 .panel{
-  background: var(--panel2);
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  padding: 12px;
-  margin-bottom: 12px;
+  background:var(--panel);
+  border:1px solid var(--line);
+  border-radius:12px;
+  padding:10px;
+  margin-bottom:12px;
 }
 
-.row{
-  display:flex;
-  align-items:center;
-  justify-content:space-between;
-  gap: 10px;
-}
+.row{display:flex;gap:8px;align-items:center;margin:8px 0;flex-wrap:wrap;}
+.label{width:64px;color:var(--muted);font-size:12px;letter-spacing:0.04em;text-transform:uppercase;}
 
-.label{
-  font-weight: 600;
-  font-size: 12px;
-  color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-}
-
-.hint{
-  margin-top: 10px;
-  font-size: 13px;
-  color: var(--text);
-  line-height: 1.35;
-  opacity: 0.9;
-}
-
-/* Buttons */
 .btn{
-  background: var(--btn);
-  color: var(--text);
-  border: 1px solid rgba(255,255,255,0.12);
-  border-radius: 10px;
-  padding: 8px 12px;
-  font-size: 13px;
-  cursor: pointer;
+  background:var(--btn);
+  color:var(--text);
+  border:1px solid var(--line);
+  border-radius:10px;
+  padding:8px 10px;
+  font-weight:650;
+  cursor:pointer;
+}
+.btn:hover{background:var(--btn2);}
+.btn.active{outline:2px solid var(--focus);}
+.btn.wide{flex:1;justify-content:center;}
+
+.btn:disabled{
+  opacity:0.45;
+  cursor:not-allowed;
+}
+.btn:disabled:hover{background:var(--btn);}
+
+.btnGrid{display:grid;grid-template-columns:repeat(5, 1fr);gap:6px;flex:1;}
+
+.select{
+  flex:1;
+  background:var(--btn);
+  color:var(--text);
+  border:1px solid var(--line);
+  border-radius:10px;
+  padding:8px 10px;
 }
 
-.btn:not([disabled]):hover{ background: var(--btnHover); }
-
-.btn[disabled]{
-  opacity: 0.45;
-  cursor: not-allowed;
-  pointer-events: none;
+.note{
+  color:var(--muted);
+  font-size:12px;
+  line-height:1.35;
+  margin-top:10px;
 }
 
-.btn.isActive{
-  border-color: rgba(255,255,255,0.28);
-  outline: 2px solid rgba(255,255,255,0.10);
-  outline-offset: 0px;
+@media (max-width: 980px){
+  #layout{grid-template-columns:1fr; height: auto;}
+  #side{border-left:none;border-top:1px solid var(--line);}
 }
-
-.btnCompact{
-  padding: 7px 10px;
-  font-size: 12px;
-}
-
-.modeButtons{ display:flex; gap:8px; }
-.modeBtn{ padding:8px 10px; min-width:68px; }
-
-.toolButtons{
-  margin-top: 10px;
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-/* Turn panel */
-.turnRow{
-  margin-top: 10px;
-  display:flex;
-  align-items:center;
-  justify-content:space-between;
-  gap: 10px;
-}
-.turnKey{
-  font-size: 12px;
-  color: var(--muted);
-  letter-spacing: 0.02em;
-}
-.turnButtons{
-  margin-top: 10px;
-  display:flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-.badge{
-  padding: 4px 10px;
-  border-radius: 999px;
-  border: 1px solid rgba(255,255,255,0.14);
-  background: rgba(10,10,14,0.35);
-  font-weight: 700;
-  font-size: 12px;
-  letter-spacing: 0.04em;
-}
-.mono{
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-  font-size: 13px;
-}
-
-/* Log */
-.logList{
-  margin-top: 10px;
-  max-height: 160px;
-  overflow-y: auto;
-  padding: 8px;
-  border-radius: 10px;
-  background: rgba(10,10,14,0.40);
-  border: 1px solid rgba(255,255,255,0.10);
-}
-.logItem{
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-  font-size: 12px;
-  line-height: 1.35;
-  color: rgba(235,235,245,0.92);
-  padding: 2px 0;
-  border-bottom: 1px dashed rgba(255,255,255,0.06);
-}
-.logItem:last-child{ border-bottom: none; }
-
-/* Terrain palette */
-.terrainPalette{
-  margin-top: 10px;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.terrainBtn{
-  position: relative;
-  padding-left: 34px;
-  flex: 1 1 46%;
-  min-width: 120px;
-}
-
-.terrainBtn::before{
-  content: "";
-  position: absolute;
-  left: 10px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 14px;
-  height: 14px;
-  border-radius: 4px;
-  border: 1px solid rgba(255,255,255,0.16);
-  background: rgba(255,255,255,0.08);
-}
-
-.terrainBtn[data-terrain="clear"]::before { background: rgba(255,255,255,0.06); }
-.terrainBtn[data-terrain="hills"]::before { background: rgba(200,170,110,0.22); }
-.terrainBtn[data-terrain="woods"]::before { background: rgba(120,200,140,0.20); }
-.terrainBtn[data-terrain="rough"]::before { background: rgba(180,180,190,0.18); }
-.terrainBtn[data-terrain="water"]::before { background: rgba(120,170,255,0.22); }
-
-/* Unit palette */
-.subLabel{
-  margin-top: 10px;
-  font-weight: 600;
-  font-size: 11px;
-  color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-}
-
-.unitRow{
-  margin-top: 8px;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.unitBtn{
-  flex: 1 1 30%;
-  min-width: 92px;
-  padding: 8px 10px;
-}
-
-/* Scenario IO */
-.ioButtons{
-  margin-top: 10px;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-#ioBox{
-  margin-top: 10px;
-  width: 100%;
-  height: 150px;
-  resize: vertical;
-  background: rgba(10,10,14,0.55);
-  color: var(--text);
-  border: 1px solid rgba(255,255,255,0.12);
-  border-radius: 10px;
-  padding: 10px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-  font-size: 12px;
-  line-height: 1.35;
-  outline: none;
-}
-
-/* BF7T1_TERRAIN_VIS_START */
-/* Terrain swatches: intentionally bold for legibility on dark UI */
-.terrainBtn[data-terrain="clear"]::before,
-.terrainBtn[data-terrain="clear"] .swatch { background: rgba(255,255,255,0.14) !important; }
-.terrainBtn[data-terrain="hills"]::before,
-.terrainBtn[data-terrain="hills"] .swatch { background: rgba(200,170,110,0.55) !important; }
-.terrainBtn[data-terrain="woods"]::before,
-.terrainBtn[data-terrain="woods"] .swatch { background: rgba(120,200,140,0.55) !important; }
-.terrainBtn[data-terrain="rough"]::before,
-.terrainBtn[data-terrain="rough"] .swatch { background: rgba(180,180,190,0.50) !important; }
-.terrainBtn[data-terrain="water"]::before,
-.terrainBtn[data-terrain="water"] .swatch { background: rgba(120,170,255,0.60) !important; }
-/* BF7T1_TERRAIN_VIS_END */

@@ -1,1401 +1,1588 @@
-'use strict';
-
-/*
-  Bannerfall
-  BF7:
-    - Movement-only in Play:
-      * selecting friendly unit shows reachable hexes (blue dashed)
-      * hovering a reachable hex shows path preview
-      * clicking a reachable hex moves unit + spends 1 activation
-    - Demo Setup button (preset formation) for fast testing
-    - Keeps: editor + export/import + build mismatch alarm + turn/acts + log
-*/
-
-const GAME_NAME = 'Bannerfall';
-const BUILD_ID  = 'BF7T1';
-
-const CONFIG = {
-  hexSize: 34,
-  board: {
-    horizRadius: 8,  // center row = 17
-    vertRadius:  5,  // top/bottom = 12
-  },
-  activationsPerTurn: 3,
-
-  unitStats: {
-    INF: { hp: 3, up: 3, mp: 1 },
-    CAV: { hp: 2, up: 4, mp: 2 },
-    SKR: { hp: 2, up: 2, mp: 2 },
-    ARC: { hp: 2, up: 2, mp: 1 },
-    GEN: { hp: 2, up: 5, mp: 2 }, // ✅ generals move 2
-  },
-};
-
-const TERRAIN = {
-  clear: { name: 'Clear', fill: 'rgba(255,255,255,0.05)' },
-  hills: { name: 'Hills', fill: 'rgba(200,170,110,0.24)' },
-  woods: { name: 'Woods', fill: 'rgba(120,200,140,0.24)' },
-  rough: { name: 'Rough', fill: 'rgba(180,180,190,0.22)' },
-  water: { name: 'Water', fill: 'rgba(120,170,255,0.28)' },
-};
-
-const SIDE_STYLE = {
-  blue: { fill: 'rgba(70,150,255,0.72)', stroke: 'rgba(200,230,255,0.60)' },
-  red:  { fill: 'rgba(255,90,90,0.65)',  stroke: 'rgba(255,210,210,0.55)' },
-};
-
-const QUALITY_STYLE = {
-  green:   { dot: 'rgba(120,255,120,0.85)', letter: 'G' },
-  regular: { dot: 'rgba(225,225,235,0.85)', letter: 'R' },
-  veteran: { dot: 'rgba(255,220,120,0.85)', letter: 'V' },
-};
-
-const VALID_SIDES = new Set(['blue', 'red']);
-const VALID_TYPES = new Set(['INF','CAV','SKR','ARC','GEN']);
-const VALID_QUALS = new Set(['green','regular','veteran']);
-const VALID_TERRAIN = new Set(Object.keys(TERRAIN));
-
-const HEX_DIRS = [
-  { q:  1, r:  0 },
-  { q:  1, r: -1 },
-  { q:  0, r: -1 },
-  { q: -1, r:  0 },
-  { q: -1, r:  1 },
-  { q:  0, r:  1 },
-];
-
-const state = {
-  buildId: BUILD_ID,
-  htmlBuild: '?',
-  buildMismatch: false,
-
-  mode: 'play',      // 'play' | 'edit'
-  tool: 'shape',     // 'shape' | 'terrain' | 'units'
-  terrainBrush: 'woods',
-  unitBrush: { side: 'blue', type: 'INF', quality: 'regular' },
-
-  play: {
-    turnSide: 'blue', // 'blue' | 'red'
-    actsLeft: CONFIG.activationsPerTurn,
-  },
-
-  selection: {
-    selectedKey: null,      // "q,r" or null
-    moveTargets: new Set(), // Set<"q,r">
-    moveCost: new Map(),    // Map<"q,r" -> cost>
-    movePrev: new Map(),    // Map<"q,r" -> fromKey>
-    hoverPath: null,        // Array<"q,r"> or null
-    hoverCost: null,        // number or null
-    canMove: false,
-  },
-
-  board: {
-    active: new Set(),   // Set<"q,r">
-    terrain: new Map(),  // Map<"q,r" -> terrainId> (absence = clear)
-  },
-
-  units: new Map(),      // Map<"q,r" -> {side,type,quality,hp,up}>
-
-  log: [],
-  lastEvent: 'boot',
-
-  ui: {
-    hover: null,
-    isPainting: false,
-    lastPaintedKey: null,
-  },
-
-  boardMetrics: null,
-};
-
-const view = { ox: 0, oy: 0, size: CONFIG.hexSize };
-
-function $(id){
-  const el = document.getElementById(id);
-  if (!el) throw new Error(`Missing element #${id}`);
-  return el;
-}
-
-function setStatus(text){
-  $('statusLine').textContent = text;
-}
-
-function ioSetStatus(msg){
-  const el = document.getElementById('ioStatus');
-  if (el) el.textContent = msg;
-}
-
-function hexKey(q, r){ return `${q},${r}`; }
-function parseKey(k){
-  const [qs, rs] = k.split(',');
-  return { q: Number(qs), r: Number(rs) };
-}
-
-function keyCompare(a, b){
-  const A = parseKey(a);
-  const B = parseKey(b);
-  return (A.r - B.r) || (A.q - B.q);
-}
-
-function nowStamp(){
-  try{
-    return new Date().toLocaleTimeString([], { hour:'2-digit', minute:'2-digit', second:'2-digit' });
-  }catch{
-    return String(Date.now());
-  }
-}
-
-function logEvent(msg){
-  const line = `${nowStamp()} ${msg}`;
-  state.log.unshift(line);
-  if (state.log.length > 60) state.log.pop();
-  state.lastEvent = msg;
-  syncLogUI();
-}
-
-function syncLogUI(){
-  const box = document.getElementById('logList');
-  if (!box) return;
-  box.innerHTML = '';
-  const n = Math.min(state.log.length, 25);
-  for (let i = 0; i < n; i++){
-    const div = document.createElement('div');
-    div.className = 'logItem';
-    div.textContent = state.log[i];
-    box.appendChild(div);
-  }
-}
-
-// pointy-top axial -> pixel
-function axialToPixel(q, r, size){
-  const x = size * Math.sqrt(3) * (q + r / 2);
-  const y = size * (3 / 2) * r;
-  return { x, y };
-}
-
-function pixelToAxial(x, y, size){
-  const q = (Math.sqrt(3)/3 * x - 1/3 * y) / size;
-  const r = (2/3 * y) / size;
-  return { q, r };
-}
-
-function axialRound(fracQ, fracR){
-  const x = fracQ;
-  const z = fracR;
-  const y = -x - z;
-
-  let rx = Math.round(x);
-  let ry = Math.round(y);
-  let rz = Math.round(z);
-
-  const dx = Math.abs(rx - x);
-  const dy = Math.abs(ry - y);
-  const dz = Math.abs(rz - z);
-
-  if (dx > dy && dx > dz) rx = -ry - rz;
-  else if (dy > dz) ry = -rx - rz;
-  else rz = -rx - ry;
-
-  return { q: rx, r: rz };
-}
-
-function hexCorners(cx, cy, size){
-  const pts = [];
-  for (let i = 0; i < 6; i++){
-    const angle = (Math.PI / 180) * (60 * i - 30);
-    pts.push({ x: cx + size * Math.cos(angle), y: cy + size * Math.sin(angle) });
-  }
-  return pts;
-}
-
-function drawHexPath(ctx, pts){
-  ctx.beginPath();
-  ctx.moveTo(pts[0].x, pts[0].y);
-  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
-  ctx.closePath();
-}
-
-function makeFrameHexes(){
-  const R = CONFIG.board.horizRadius;
-  const V = CONFIG.board.vertRadius;
-  const out = [];
-  for (let r = -V; r <= V; r++){
-    const qMin = Math.max(-R, -r - R);
-    const qMax = Math.min( R, -r + R);
-    for (let q = qMin; q <= qMax; q++) out.push({ q, r });
-  }
-  out.sort((a,b) => (a.r - b.r) || (a.q - b.q));
-  return out;
-}
-
-function isWithinFrame(q, r){
-  const R = CONFIG.board.horizRadius;
-  const V = CONFIG.board.vertRadius;
-  if (r < -V || r > V) return false;
-  const qMin = Math.max(-R, -r - R);
-  const qMax = Math.min( R, -r + R);
-  return q >= qMin && q <= qMax;
-}
-
-function computeBoardMetricsFromActive(activeSet){
-  const counts = new Map(); // r -> count
-  for (const k of activeSet){
-    const { r } = parseKey(k);
-    counts.set(r, (counts.get(r) || 0) + 1);
-  }
-  if (counts.size === 0) return { rows: 0, minRow: 0, maxRow: 0, centerRow: 0 };
-
-  let minRow = Infinity, maxRow = -Infinity;
-  for (const c of counts.values()){
-    if (c < minRow) minRow = c;
-    if (c > maxRow) maxRow = c;
-  }
-  const centerRow = counts.get(0) || 0;
-  return { rows: counts.size, minRow, maxRow, centerRow };
-}
-
-function resizeCanvas(canvas, ctx){
-  const rect = canvas.getBoundingClientRect();
-  const dpr = window.devicePixelRatio || 1;
-  canvas.width  = Math.max(1, Math.floor(rect.width  * dpr));
-  canvas.height = Math.max(1, Math.floor(rect.height * dpr));
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-}
-
-function computeLayout(frameHexes, canvas){
-  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-  for (const hex of frameHexes){
-    const p = axialToPixel(hex.q, hex.r, CONFIG.hexSize);
-    minX = Math.min(minX, p.x);
-    maxX = Math.max(maxX, p.x);
-    minY = Math.min(minY, p.y);
-    maxY = Math.max(maxY, p.y);
-  }
-
-  const w = canvas.clientWidth;
-  const h = canvas.clientHeight;
-
-  const islandW = (maxX - minX) + CONFIG.hexSize * 2;
-  const islandH = (maxY - minY) + CONFIG.hexSize * 2;
-
-  view.ox = (w - islandW) / 2 + CONFIG.hexSize - minX;
-  view.oy = (h - islandH) / 2 + CONFIG.hexSize - minY;
-  view.size = CONFIG.hexSize;
-}
-
-function getCanvasPoint(ev, canvas){
-  const rect = canvas.getBoundingClientRect();
-  return { x: ev.clientX - rect.left, y: ev.clientY - rect.top };
-}
-
-function pickHexAt(canvasX, canvasY){
-  const localX = canvasX - view.ox;
-  const localY = canvasY - view.oy;
-  const frac = pixelToAxial(localX, localY, view.size);
-  const h = axialRound(frac.q, frac.r);
-  if (!isWithinFrame(h.q, h.r)) return null;
-  return h;
-}
-
-function getTerrainIdAtKey(k){
-  return state.board.terrain.get(k) || 'clear';
-}
-
-function setTerrainAtKey(k, terrainId){
-  if (terrainId === 'clear') state.board.terrain.delete(k);
-  else state.board.terrain.set(k, terrainId);
-}
-
-function moveCostFor(type, terrainId){
-  if (terrainId === 'water') return Infinity;
-  if (terrainId === 'clear') return 1;
-  if (terrainId === 'hills' || terrainId === 'woods' || terrainId === 'rough'){
-    return (type === 'CAV') ? 3 : 2;
-  }
-  return 1;
-}
-
-function clearMoveOverlay(){
-  state.selection.moveTargets = new Set();
-  state.selection.moveCost = new Map();
-  state.selection.movePrev = new Map();
-  state.selection.hoverPath = null;
-  state.selection.hoverCost = null;
-  state.selection.canMove = false;
-}
-
-function canMoveSelected(){
-  if (state.mode !== 'play') return false;
-  if (state.play.actsLeft <= 0) return false;
-  const k = state.selection.selectedKey;
-  if (!k) return false;
-  const u = state.units.get(k);
-  if (!u) return false;
-  if (u.side !== state.play.turnSide) return false;
-  return true;
-}
-
-function computeReachable(startKey, unitType, mpBudget){
-  const dist = new Map(); // key -> cost
-  const prev = new Map(); // key -> fromKey
-  const open = [];        // {k,c}
-
-  dist.set(startKey, 0);
-  open.push({ k: startKey, c: 0 });
-
-  while (open.length){
-    // tiny board => linear scan PQ is fine
-    let bestIdx = 0;
-    for (let i = 1; i < open.length; i++){
-      if (open[i].c < open[bestIdx].c) bestIdx = i;
-    }
-    const cur = open.splice(bestIdx, 1)[0];
-    const curBest = dist.get(cur.k);
-    if (curBest !== cur.c) continue;
-
-    const { q, r } = parseKey(cur.k);
-    for (const d of HEX_DIRS){
-      const nq = q + d.q;
-      const nr = r + d.r;
-      const nk = hexKey(nq, nr);
-
-      if (!state.board.active.has(nk)) continue;
-      if (nk !== startKey && state.units.has(nk)) continue;
-
-      const terrainId = getTerrainIdAtKey(nk);
-      const step = moveCostFor(unitType, terrainId);
-      if (!Number.isFinite(step)) continue;
-
-      const newCost = cur.c + step;
-      if (newCost > mpBudget) continue;
-
-      const old = dist.get(nk);
-      if (old === undefined || newCost < old){
-        dist.set(nk, newCost);
-        prev.set(nk, cur.k);
-        open.push({ k: nk, c: newCost });
-      }
-    }
-  }
-
-  const targets = new Set();
-  for (const [k] of dist){
-    if (k !== startKey) targets.add(k);
-  }
-
-  return { targets, dist, prev };
-}
-
-function buildPath(prevMap, startKey, destKey){
-  const path = [];
-  let cur = destKey;
-  while (cur && cur !== startKey){
-    path.push(cur);
-    cur = prevMap.get(cur);
-  }
-  if (cur !== startKey) return null;
-  path.push(startKey);
-  path.reverse();
-  return path;
-}
-
-function recomputeMoveOverlay(){
-  clearMoveOverlay();
-  if (!canMoveSelected()) return;
-
-  const k = state.selection.selectedKey;
-  const u = state.units.get(k);
-  if (!u) return;
-
-  const stats = CONFIG.unitStats[u.type];
-  const mp = stats ? stats.mp : 0;
-
-  const res = computeReachable(k, u.type, mp);
-  state.selection.moveTargets = res.targets;
-  state.selection.moveCost = res.dist;
-  state.selection.movePrev = res.prev;
-  state.selection.canMove = true;
-}
-
-function toggleActiveHex(q, r){
-  const k = hexKey(q, r);
-  if (state.board.active.has(k)){
-    state.board.active.delete(k);
-    state.board.terrain.delete(k);
-    state.units.delete(k);
-    if (state.selection.selectedKey === k) state.selection.selectedKey = null;
-    logEvent(`shape:off ${k}`);
-  }else{
-    state.board.active.add(k);
-    logEvent(`shape:on ${k}`);
-  }
-  state.boardMetrics = computeBoardMetricsFromActive(state.board.active);
-}
-
-function paintTerrainAt(q, r){
-  const k = hexKey(q, r);
-  if (!state.board.active.has(k)) return;
-  setTerrainAtKey(k, state.terrainBrush);
-  logEvent(`terrain:${state.terrainBrush} ${k}`);
-}
-
-function setMode(nextMode){
-  if (state.mode === nextMode) return;
-  state.mode = nextMode;
-
-  state.ui.isPainting = false;
-  state.ui.lastPaintedKey = null;
-
-  if (nextMode === 'play'){
-    logEvent('mode:play');
-  }else{
-    // entering edit: clear selection + move overlay to avoid confusing stale highlights
-    state.selection.selectedKey = null;
-    clearMoveOverlay();
-    logEvent('mode:edit');
-  }
-
-  syncSidebar();
-}
-
-function setTool(nextTool){
-  state.tool = nextTool;
-  logEvent(`tool:${nextTool}`);
-  syncSidebar();
-}
-
-function setTerrainBrush(nextBrush){
-  state.terrainBrush = nextBrush;
-  logEvent(`brush:${nextBrush}`);
-  syncSidebar();
-}
-
-function setUnitBrushSide(side){
-  state.unitBrush.side = side;
-  logEvent(`ubSide:${side}`);
-  syncSidebar();
-}
-
-function setUnitBrushType(type){
-  state.unitBrush.type = type;
-  if (type === 'GEN') state.unitBrush.quality = 'green';
-  logEvent(`ubType:${type}`);
-  syncSidebar();
-}
-
-function setUnitBrushQuality(q){
-  if (state.unitBrush.type === 'GEN') return;
-  state.unitBrush.quality = q;
-  logEvent(`ubQual:${q}`);
-  syncSidebar();
-}
-
-function placeUnitDirect(q, r, side, type, quality){
-  const k = hexKey(q, r);
-  if (!state.board.active.has(k)) return false;
-  if (state.units.has(k)) return false;
-  if (!VALID_SIDES.has(side) || !VALID_TYPES.has(type)) return false;
-
-  const finalQuality = (type === 'GEN') ? 'green' : (VALID_QUALS.has(quality) ? quality : 'regular');
-  const stats = CONFIG.unitStats[type];
-
-  state.units.set(k, { side, type, quality: finalQuality, hp: stats.hp, up: stats.up });
-  return true;
-}
-
-function placeUnitAt(q, r){
-  const k = hexKey(q, r);
-  if (!state.board.active.has(k)) return;
-
-  const type = state.unitBrush.type;
-  const side = state.unitBrush.side;
-  const quality = (type === 'GEN') ? 'green' : state.unitBrush.quality;
-  const stats = CONFIG.unitStats[type];
-
-  state.units.set(k, { side, type, quality, hp: stats.hp, up: stats.up });
-  logEvent(`unit:place ${side} ${type} ${quality} ${k}`);
-}
-
-function removeUnitAt(q, r){
-  const k = hexKey(q, r);
-  if (state.units.delete(k)){
-    if (state.selection.selectedKey === k) state.selection.selectedKey = null;
-    clearMoveOverlay();
-    logEvent(`unit:remove ${k}`);
-  }
-}
-
-function clearUnits(){
-  const n = state.units.size;
-  state.units.clear();
-  state.selection.selectedKey = null;
-  clearMoveOverlay();
-  logEvent(`units:clear (${n})`);
-
-  // reset turn state for sanity when building scenarios
-  state.play.turnSide = 'blue';
-  state.play.actsLeft = CONFIG.activationsPerTurn;
-  logEvent(`TURN BLUE (acts=${state.play.actsLeft})`);
-}
-
-function applyDemoSetup(){
-  clearUnits();
-
-  const P = [
-    // BLUE (bottom / +r)
-    { q: 0, r: 4, side: 'blue', type: 'GEN', quality: 'green' },
-    { q: -1, r: 3, side: 'blue', type: 'INF', quality: 'regular' },
-    { q: 0, r: 3, side: 'blue', type: 'INF', quality: 'regular' },
-    { q: 1, r: 3, side: 'blue', type: 'INF', quality: 'regular' },
-    { q: 0, r: 5, side: 'blue', type: 'ARC', quality: 'regular' },
-    { q: -3, r: 2, side: 'blue', type: 'CAV', quality: 'regular' },
-    { q: 3, r: 2, side: 'blue', type: 'CAV', quality: 'regular' },
-    { q: -2, r: 4, side: 'blue', type: 'SKR', quality: 'regular' },
-    { q: 2, r: 4, side: 'blue', type: 'SKR', quality: 'regular' },
-
-    // RED (top / -r)
-    { q: 0, r: -4, side: 'red', type: 'GEN', quality: 'green' },
-    { q: -1, r: -3, side: 'red', type: 'INF', quality: 'regular' },
-    { q: 0, r: -3, side: 'red', type: 'INF', quality: 'regular' },
-    { q: 1, r: -3, side: 'red', type: 'INF', quality: 'regular' },
-    { q: 0, r: -5, side: 'red', type: 'ARC', quality: 'regular' },
-    { q: -3, r: -2, side: 'red', type: 'CAV', quality: 'regular' },
-    { q: 3, r: -2, side: 'red', type: 'CAV', quality: 'regular' },
-    { q: -2, r: -4, side: 'red', type: 'SKR', quality: 'regular' },
-    { q: 2, r: -4, side: 'red', type: 'SKR', quality: 'regular' },
+(() => {
+  'use strict';
+
+  // ===== Warfare (D-Day baseline → RB01 rules engine alignment) =====
+  // This build intentionally keeps the "Warfare" UI calm/legible while
+  // tightening the mechanics to the rules spec you provided.
+
+  const GAME_NAME = 'Bannerfall';
+  const BUILD_ID = (window.POLEMO_BUILD_ID || window.POLEMO_BUILD || 'DEV');
+
+  // --- Board shape (157-hex "island")
+  // Rows are r=0..10, each row is a contiguous run of q.
+  const DEFAULT_ROWS = [
+    { qStart: 2, len: 12 }, // r=0
+    { qStart: 1, len: 13 }, // r=1
+    { qStart: 1, len: 14 }, // r=2
+    { qStart: 0, len: 15 }, // r=3
+    { qStart: 0, len: 16 }, // r=4
+    { qStart: -1, len: 17 }, // r=5
+    { qStart: 0, len: 16 }, // r=6
+    { qStart: 0, len: 15 }, // r=7
+    { qStart: 1, len: 14 }, // r=8
+    { qStart: 1, len: 13 }, // r=9
+    { qStart: 2, len: 12 }, // r=10
   ];
 
-  let placed = 0;
-  for (const u of P){
-    if (placeUnitDirect(u.q, u.r, u.side, u.type, u.quality)) placed++;
-  }
+  // --- Terrain
+  const TERRAIN_DEFS = [
+    { id: 'clear', label: 'Clear' },
+    { id: 'hills', label: 'Hills' },
+    { id: 'woods', label: 'Woods' },
+    { id: 'rough', label: 'Rough' },
+    { id: 'water', label: 'Water' },
+  ];
 
-  ioSetStatus(`Demo Setup placed ${placed} units.`);
-  logEvent(`demo:setup placed=${placed}`);
-}
+  // --- Core rules constants
+  const ACT_LIMIT = 3; // activations per turn
+  const COMMAND_RADIUS = 3; // hex distance
 
-/* ========= Play scaffold ========= */
+  // Dice faces: 5–6 = Hit, 4 = Retreat.
+  const DIE_HIT = new Set([5, 6]);
+  const DIE_RETREAT = 4;
 
-function selectedUnit(){
-  const k = state.selection.selectedKey;
-  if (!k) return null;
-  return state.units.get(k) || null;
-}
+  // --- Units (RB01 canonical)
+  // HP is mutable; UP is fixed strategic value.
+  // Quality affects COMMAND DEPENDENCE only (no dice bonuses in RB01).
+  const UNIT_DEFS = [
+    // id, label, abbrev, symbol, MP, maxHP, UP
+    { id: 'inf', label: 'Infantry', abbrev: 'INF', symbol: 'INF', move: 1, hp: 3, up: 3, meleeDice: 2, ranged: null },
+    { id: 'cav', label: 'Cavalry', abbrev: 'CAV', symbol: 'CAV', move: 2, hp: 2, up: 4, meleeDice: 3, ranged: null },
+    { id: 'skr', label: 'Skirmishers', abbrev: 'SKR', symbol: 'SKR', move: 2, hp: 2, up: 2, meleeDice: 2, ranged: { 2: 1 } }, // fixed range 2
+    { id: 'arc', label: 'Archers', abbrev: 'ARC', symbol: '➶', move: 1, hp: 2, up: 2, meleeDice: 1, ranged: { 2: 2, 3: 1 } }, // range 2–3 only
+    { id: 'gen', label: 'General', abbrev: 'GEN', symbol: '★', move: 2, hp: 2, up: 5, meleeDice: 1, ranged: null },
+  ];
 
-function selectAtKey(k){
-  state.selection.selectedKey = null;
-  clearMoveOverlay();
+  const UNIT_BY_ID = new Map(UNIT_DEFS.map(u => [u.id, u]));
 
-  if (!k){
-    logEvent('select:clear');
-    return;
-  }
-  if (!state.units.has(k)){
-    logEvent(`select:empty ${k}`);
-    return;
-  }
+  const QUALITY_ORDER = ['green', 'regular', 'veteran'];
 
-  state.selection.selectedKey = k;
-  const u = state.units.get(k);
-  logEvent(`select:${u.side} ${u.type} ${k}`);
+  // Odd-r offset neighbors (pointy-top).
+  const NEIGH_EVEN = [[+1, 0], [0, -1], [-1, -1], [-1, 0], [-1, +1], [0, +1]];
+  const NEIGH_ODD = [[+1, 0], [+1, -1], [0, -1], [-1, 0], [0, +1], [+1, +1]];
 
-  // compute move overlay if eligible
-  recomputeMoveOverlay();
-}
+  // --- DOM
+  const elCanvas = document.getElementById('c');
+  const ctx = elCanvas.getContext('2d');
 
-function canPassSelected(){
-  if (state.mode !== 'play') return false;
-  if (state.play.actsLeft <= 0) return false;
-  const u = selectedUnit();
-  if (!u) return false;
-  return u.side === state.play.turnSide;
-}
+  const elHudTitle = document.getElementById('hudTitle');
+  const elHudMeta = document.getElementById('hudMeta');
+  const elHudLast = document.getElementById('hudLast');
 
-function passActivation(){
-  if (!canPassSelected()){
-    logEvent('pass:blocked');
-    return;
-  }
-  const k = state.selection.selectedKey;
-  const u = selectedUnit();
-  state.play.actsLeft = Math.max(0, state.play.actsLeft - 1);
-  logEvent(`PASS ${u.side.toUpperCase()} ${u.type} ${k} (acts=${state.play.actsLeft})`);
+  const elModeBtn = document.getElementById('modeBtn');
+  const elToolUnits = document.getElementById('toolUnits');
+  const elToolTerrain = document.getElementById('toolTerrain');
 
-  recomputeMoveOverlay();
+  const elSideBlue = document.getElementById('sideBlue');
+  const elSideRed = document.getElementById('sideRed');
 
-  if (state.play.actsLeft === 0){
-    logEvent(`${state.play.turnSide.toUpperCase()} has 0 acts. End Turn.`);
-  }
-}
+  const elTypeBtns = document.getElementById('typeBtns');
+  const elEraseBtn = document.getElementById('eraseBtn');
 
-function endTurn(){
-  if (state.mode !== 'play'){
-    logEvent('endTurn:blocked (not in play)');
-    return;
-  }
-  const prev = state.play.turnSide;
-  const next = (prev === 'blue') ? 'red' : 'blue';
-  state.play.turnSide = next;
-  state.play.actsLeft = CONFIG.activationsPerTurn;
+  const elQualityGreen = document.getElementById('qGreen');
+  const elQualityRegular = document.getElementById('qRegular');
+  const elQualityVeteran = document.getElementById('qVeteran');
 
-  state.selection.selectedKey = null;
-  clearMoveOverlay();
+  const elTerrainBtns = document.getElementById('terrainBtns');
 
-  logEvent(`TURN ${next.toUpperCase()} (acts=${state.play.actsLeft})`);
-}
+  const elScenarioSel = document.getElementById('scenarioSel');
+  const elLoadScenarioBtn = document.getElementById('loadScenarioBtn');
+  const elClearUnitsBtn = document.getElementById('clearUnitsBtn');
 
-function tryMoveTo(destKey){
-  if (!canMoveSelected()){
-    logEvent('move:blocked');
-    return false;
-  }
-  if (!state.selection.moveTargets.has(destKey)){
-    logEvent(`move:blocked destNotReachable ${destKey}`);
-    return false;
-  }
+  const elVictorySel = document.getElementById('victorySel');
+  const elEndTurnBtn = document.getElementById('endTurnBtn');
 
-  const startKey = state.selection.selectedKey;
-  const u = selectedUnit();
-  if (!u) return false;
+  // --- State
+  const state = {
+    mode: 'edit', // 'edit' | 'play'
+    tool: 'units', // 'units' | 'terrain'
 
-  if (state.units.has(destKey)){
-    logEvent(`move:blocked occupied ${destKey}`);
-    return false;
-  }
+    editSide: 'blue',
+    editType: 'inf',
+    editQuality: 'green',
+    editErase: false,
+    editTerrain: 'clear',
 
-  const cost = state.selection.moveCost.get(destKey);
-  state.units.delete(startKey);
-  state.units.set(destKey, u);
+    // Play
+    turn: 1,
+    side: 'blue',
+    actsUsed: 0,
+    actedUnitIds: new Set(),
 
-  state.play.actsLeft = Math.max(0, state.play.actsLeft - 1);
-  state.selection.selectedKey = destKey;
+    // Visual toggles
+    showCommand: true,
+    terrainTheme: 'vivid',
 
-  logEvent(`MOVE ${u.side.toUpperCase()} ${u.type} ${startKey} -> ${destKey} cost=${cost} (acts=${state.play.actsLeft})`);
+    selectedKey: null,
 
-  // recompute from new position if still has acts
-  recomputeMoveOverlay();
+    // Current activation context (only while a unit is selected in Play)
+    act: null, // { unitId, committed, moved, attacked, inCommandStart }
 
-  if (state.play.actsLeft === 0){
-    logEvent(`${state.play.turnSide.toUpperCase()} has 0 acts. End Turn.`);
-  }
-  return true;
-}
+    victoryMode: 'clear',
+    initialUP: { blue: 0, red: 0 },
+    capturedUP: { blue: 0, red: 0 },
 
-/* ========= Unit rendering ========= */
+    gameOver: false,
+    winner: null,
 
-function drawTokenShape(ctx, type, cx, cy, size){
-  ctx.beginPath();
-  if (type === 'INF'){
-    const s = size * 0.95;
-    ctx.rect(cx - s/2, cy - s/2, s, s);
-  }else if (type === 'CAV'){
-    ctx.moveTo(cx, cy - size * 0.62);
-    ctx.lineTo(cx + size * 0.62, cy + size * 0.55);
-    ctx.lineTo(cx - size * 0.62, cy + size * 0.55);
-    ctx.closePath();
-  }else if (type === 'SKR'){
-    ctx.moveTo(cx, cy - size * 0.70);
-    ctx.lineTo(cx + size * 0.70, cy);
-    ctx.lineTo(cx, cy + size * 0.70);
-    ctx.lineTo(cx - size * 0.70, cy);
-    ctx.closePath();
-  }else{
-    ctx.arc(cx, cy, size * 0.70, 0, Math.PI * 2);
-  }
-}
+    // Minimal "event trace" (future UI can display this without changing rules)
+    events: [],
 
-function drawUnit(ctx, cx, cy, unit){
-  const sideStyle = SIDE_STYLE[unit.side] || SIDE_STYLE.blue;
-  const qStyle = QUALITY_STYLE[unit.quality] || QUALITY_STYLE.regular;
-  const size = CONFIG.hexSize * 0.62;
-
-  ctx.save();
-
-  drawTokenShape(ctx, unit.type, cx, cy, size);
-  ctx.fillStyle = sideStyle.fill;
-  ctx.strokeStyle = sideStyle.stroke;
-  ctx.lineWidth = 2;
-  ctx.fill();
-  ctx.stroke();
-
-  ctx.fillStyle = 'rgba(245,245,250,0.92)';
-  ctx.font = 'bold 12px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(unit.type, cx, cy + 1);
-
-  const bx = cx + size * 0.48;
-  const by = cy + size * 0.42;
-  ctx.beginPath();
-  ctx.arc(bx, by, 6, 0, Math.PI * 2);
-  ctx.fillStyle = qStyle.dot;
-  ctx.fill();
-  ctx.strokeStyle = 'rgba(0,0,0,0.35)';
-  ctx.lineWidth = 1;
-  ctx.stroke();
-
-  ctx.fillStyle = 'rgba(10,10,14,0.92)';
-  ctx.font = 'bold 9px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
-  ctx.fillText(qStyle.letter, bx, by + 0.5);
-
-  if (unit.type === 'GEN'){
-    ctx.fillStyle = 'rgba(255,220,120,0.90)';
-    ctx.font = 'bold 12px ui-sans-serif, system-ui, -apple-system';
-    ctx.fillText('★', cx, cy - size * 0.62);
-  }
-
-  ctx.restore();
-}
-
-/* ========= Scenario Export / Import ========= */
-
-function scenarioFromState(){
-  const active = Array.from(state.board.active).sort(keyCompare);
-
-  const terrainObj = {};
-  for (const [k, t] of state.board.terrain.entries()){
-    if (state.board.active.has(k)) terrainObj[k] = t;
-  }
-
-  const units = [];
-  for (const [k, u] of state.units.entries()){
-    const { q, r } = parseKey(k);
-    units.push({ q, r, side: u.side, type: u.type, quality: u.quality });
-  }
-  units.sort((a,b) => (a.r - b.r) || (a.q - b.q) || (a.side.localeCompare(b.side)) || (a.type.localeCompare(b.type)));
-
-  return {
-    version: 1,
-    game: GAME_NAME,
-    build: BUILD_ID,
-    savedAt: new Date().toISOString(),
-    board: { active, terrain: terrainObj },
-    units,
+    last: 'Booting…',
   };
-}
 
-function normalizeActiveItem(item){
-  if (typeof item === 'string'){
-    if (!item.includes(',')) return null;
-    const { q, r } = parseKey(item);
-    if (!Number.isFinite(q) || !Number.isFinite(r)) return null;
-    return { q, r };
+  // --- Board model
+  function key(q, r) { return `${q},${r}`; }
+
+  function buildBoardFromRows(rows) {
+    const active = [];
+    const activeSet = new Set();
+    let minQ = Infinity, maxQ = -Infinity, minR = Infinity, maxR = -Infinity;
+
+    for (let r = 0; r < rows.length; r++) {
+      const row = rows[r];
+      for (let q = row.qStart; q < row.qStart + row.len; q++) {
+        const k = key(q, r);
+        active.push({ q, r, k, terrain: 'clear', cx: 0, cy: 0, neigh: [] });
+        activeSet.add(k);
+        minQ = Math.min(minQ, q);
+        maxQ = Math.max(maxQ, q);
+        minR = Math.min(minR, r);
+        maxR = Math.max(maxR, r);
+      }
+    }
+
+    const byKey = new Map(active.map(h => [h.k, h]));
+
+    // Precompute ACTIVE neighbors (movement & adjacency checks)
+    for (const h of active) {
+      const deltas = (h.r & 1) ? NEIGH_ODD : NEIGH_EVEN;
+      h.neigh = [];
+      for (const [dq, dr] of deltas) {
+        const nk = key(h.q + dq, h.r + dr);
+        if (activeSet.has(nk)) h.neigh.push(nk);
+      }
+    }
+
+    return { active, activeSet, byKey, minQ, maxQ, minR, maxR };
   }
-  if (item && typeof item === 'object'){
-    const q = Number(item.q);
-    const r = Number(item.r);
-    if (!Number.isFinite(q) || !Number.isFinite(r)) return null;
-    return { q, r };
+
+  const board = buildBoardFromRows(DEFAULT_ROWS);
+
+  // Units live in a Map keyed by hex key.
+  const unitsByHex = new Map();
+  let nextUnitId = 1;
+
+  // --- Scenarios (tiny demos)
+  // We keep the existing demos as placeholders; we can retune them into
+  // "Even Lines / Encirclement / Corridor" once RB01 feels solid.
+  const SCENARIOS = {
+    'Empty (Island)': {
+      terrain: [],
+      units: [],
+    },
+    'Demo A — Line Clash': {
+      terrain: [],
+      units: [
+        // Blue
+        { q: 2, r: 5, side: 'blue', type: 'gen', quality: 'green' },
+        { q: 3, r: 4, side: 'blue', type: 'inf', quality: 'green' },
+        { q: 3, r: 6, side: 'blue', type: 'inf', quality: 'green' },
+        { q: 4, r: 5, side: 'blue', type: 'cav', quality: 'regular' },
+        { q: 2, r: 4, side: 'blue', type: 'arc', quality: 'green' },
+        { q: 2, r: 6, side: 'blue', type: 'skr', quality: 'green' },
+
+        // Red
+        { q: 13, r: 5, side: 'red', type: 'gen', quality: 'green' },
+        { q: 12, r: 4, side: 'red', type: 'inf', quality: 'green' },
+        { q: 12, r: 6, side: 'red', type: 'inf', quality: 'green' },
+        { q: 11, r: 5, side: 'red', type: 'cav', quality: 'regular' },
+        { q: 13, r: 4, side: 'red', type: 'arc', quality: 'green' },
+        { q: 13, r: 6, side: 'red', type: 'skr', quality: 'green' },
+      ],
+    },
+    'Demo B — Center Push': {
+      terrain: [],
+      units: [
+        { q: 4, r: 4, side: 'blue', type: 'gen', quality: 'green' },
+        { q: 4, r: 5, side: 'blue', type: 'inf', quality: 'regular' },
+        { q: 5, r: 6, side: 'blue', type: 'cav', quality: 'green' },
+        { q: 3, r: 6, side: 'blue', type: 'arc', quality: 'green' },
+
+        { q: 11, r: 6, side: 'red', type: 'gen', quality: 'green' },
+        { q: 10, r: 5, side: 'red', type: 'inf', quality: 'regular' },
+        { q: 9, r: 4, side: 'red', type: 'cav', quality: 'green' },
+        { q: 12, r: 4, side: 'red', type: 'arc', quality: 'green' },
+      ],
+    },
+    'Demo C — Skirmisher Screen': {
+      terrain: [],
+      units: [
+        { q: 2, r: 5, side: 'blue', type: 'gen', quality: 'green' },
+        { q: 3, r: 5, side: 'blue', type: 'inf', quality: 'green' },
+        { q: 4, r: 5, side: 'blue', type: 'cav', quality: 'green' },
+        { q: 3, r: 4, side: 'blue', type: 'skr', quality: 'regular' },
+        { q: 3, r: 6, side: 'blue', type: 'skr', quality: 'regular' },
+        { q: 1, r: 5, side: 'blue', type: 'arc', quality: 'green' },
+
+        { q: 13, r: 5, side: 'red', type: 'gen', quality: 'green' },
+        { q: 12, r: 5, side: 'red', type: 'inf', quality: 'green' },
+        { q: 11, r: 5, side: 'red', type: 'cav', quality: 'green' },
+        { q: 12, r: 4, side: 'red', type: 'skr', quality: 'regular' },
+        { q: 12, r: 6, side: 'red', type: 'skr', quality: 'regular' },
+        { q: 14, r: 5, side: 'red', type: 'arc', quality: 'green' },
+      ],
+    },
+  };
+
+  // --- Geometry helpers
+  function toAxial(q, r) {
+    // Convert odd-r offset (q=col, r=row) to axial (x,z) where z=r.
+    const x = q - ((r - (r & 1)) / 2);
+    const z = r;
+    return { x, z };
   }
-  return null;
-}
 
-function importScenario(obj){
-  if (!obj || typeof obj !== 'object') throw new Error('Scenario JSON root must be an object.');
-  if (!obj.board || typeof obj.board !== 'object') throw new Error('Scenario missing "board" object.');
-  if (!Array.isArray(obj.board.active)) throw new Error('Scenario "board.active" must be an array.');
-
-  const nextActive = new Set();
-  let skippedActive = 0;
-
-  for (const item of obj.board.active){
-    const h = normalizeActiveItem(item);
-    if (!h) { skippedActive++; continue; }
-    if (!isWithinFrame(h.q, h.r)) { skippedActive++; continue; }
-    nextActive.add(hexKey(h.q, h.r));
+  function axialDistance(aq, ar, bq, br) {
+    const a = toAxial(aq, ar);
+    const b = toAxial(bq, br);
+    const dx = a.x - b.x;
+    const dz = a.z - b.z;
+    const dy = (-a.x - a.z) - (-b.x - b.z);
+    return Math.max(Math.abs(dx), Math.abs(dy), Math.abs(dz));
   }
-  if (nextActive.size === 0) throw new Error('Scenario "board.active" produced zero valid hexes.');
 
-  const nextTerrain = new Map();
-  let skippedTerrain = 0;
+  // --- Canvas layout
+  let R = 28; // will be recalculated
+  let HEX_W = 0;
+  let HEX_H = 0;
+  let STEP_Y = 0;
+  let ORIGIN_X = 0;
+  let ORIGIN_Y = 0;
 
-  const srcTerrain = obj.board.terrain || {};
-  if (srcTerrain && typeof srcTerrain === 'object'){
-    for (const [k, t] of Object.entries(srcTerrain)){
-      if (!nextActive.has(k)) { skippedTerrain++; continue; }
-      if (!VALID_TERRAIN.has(String(t))) { skippedTerrain++; continue; }
-      if (String(t) === 'clear') continue;
-      nextTerrain.set(k, String(t));
+  function resize() {
+    // Canvas fills left pane.
+    const wrap = document.getElementById('canvasWrap');
+    const rect = wrap.getBoundingClientRect();
+    elCanvas.width = Math.floor(rect.width * devicePixelRatio);
+    elCanvas.height = Math.floor(rect.height * devicePixelRatio);
+    elCanvas.style.width = `${Math.floor(rect.width)}px`;
+    elCanvas.style.height = `${Math.floor(rect.height)}px`;
+    ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+
+    // Fit board.
+    const cols = (board.maxQ - board.minQ + 1);
+    const rows = (board.maxR - board.minR + 1);
+    const availW = rect.width;
+    const availH = rect.height;
+
+    // For pointy-top hexes with odd-r offset:
+    // width ≈ sqrt(3)*R*(cols + 0.5)
+    // height ≈ R*((rows-1)*1.5 + 2)
+    const rByW = availW / (Math.sqrt(3) * (cols + 0.5));
+    const rByH = availH / (((rows - 1) * 1.5) + 2);
+    R = Math.max(18, Math.min(42, Math.floor(Math.min(rByW, rByH))));
+
+    HEX_W = Math.sqrt(3) * R;
+    HEX_H = 2 * R;
+    STEP_Y = 1.5 * R;
+
+    const boardW = HEX_W * (cols + 0.5);
+    const boardH = R * (((rows - 1) * 1.5) + 2);
+
+    ORIGIN_X = (availW - boardW) / 2 + HEX_W / 2;
+    ORIGIN_Y = (availH - boardH) / 2 + R;
+
+    for (const h of board.active) {
+      const x = ORIGIN_X + (h.q - board.minQ) * HEX_W + ((h.r & 1) ? (HEX_W / 2) : 0);
+      const y = ORIGIN_Y + (h.r - board.minR) * STEP_Y;
+      h.cx = x;
+      h.cy = y;
+    }
+
+    draw();
+  }
+
+  function hexPath(cx, cy) {
+    const p = new Path2D();
+    for (let i = 0; i < 6; i++) {
+      const ang = (Math.PI / 180) * (60 * i - 30); // pointy top
+      const x = cx + R * Math.cos(ang);
+      const y = cy + R * Math.sin(ang);
+      if (i === 0) p.moveTo(x, y);
+      else p.lineTo(x, y);
+    }
+    p.closePath();
+    return p;
+  }
+
+  function hexCorners(cx, cy) {
+    // Corner order matches hexPath (i=0..5, angle = 60*i - 30)
+    const pts = [];
+    for (let i = 0; i < 6; i++) {
+      const ang = (Math.PI / 180) * (60 * i - 30);
+      pts.push({
+        x: cx + R * Math.cos(ang),
+        y: cy + R * Math.sin(ang),
+      });
+    }
+    return pts;
+  }
+
+  function edgeCornerIdx(dir) {
+    // Neighbor order is [E, NE, NW, W, SW, SE]
+    switch (dir) {
+      case 0: return [0, 1]; // E
+      case 1: return [5, 0]; // NE
+      case 2: return [4, 5]; // NW
+      case 3: return [3, 4]; // W
+      case 4: return [2, 3]; // SW
+      case 5: return [1, 2]; // SE
+      default: return [0, 1];
     }
   }
 
-  const nextUnits = new Map();
-  let skippedUnits = 0;
+  function commandOutlinePath(genKey) {
+    const g = board.byKey.get(genKey);
+    if (!g) return null;
 
-  const srcUnits = Array.isArray(obj.units) ? obj.units : [];
-  for (const u of srcUnits){
-    if (!u || typeof u !== 'object'){ skippedUnits++; continue; }
-    const q = Number(u.q);
-    const r = Number(u.r);
-    if (!Number.isFinite(q) || !Number.isFinite(r)){ skippedUnits++; continue; }
+    // Command area = all active hexes within COMMAND_RADIUS.
+    const inside = new Set();
+    for (const h of board.active) {
+      if (axialDistance(h.q, h.r, g.q, g.r) <= COMMAND_RADIUS) inside.add(h.k);
+    }
 
-    const k = hexKey(q, r);
-    if (!nextActive.has(k)) { skippedUnits++; continue; }
-    if (nextUnits.has(k)) { skippedUnits++; continue; }
+    const path = new Path2D();
 
-    const side = String(u.side || '');
-    const type = String(u.type || '');
-    let quality = String(u.quality || '');
+    for (const h of board.active) {
+      if (!inside.has(h.k)) continue;
 
-    if (!VALID_SIDES.has(side) || !VALID_TYPES.has(type)){ skippedUnits++; continue; }
-    if (type === 'GEN') quality = 'green';
-    if (!VALID_QUALS.has(quality)) quality = (type === 'GEN') ? 'green' : 'regular';
+      const corners = hexCorners(h.cx, h.cy);
+      const deltas = (h.r & 1) ? NEIGH_ODD : NEIGH_EVEN;
 
-    const stats = CONFIG.unitStats[type];
-    nextUnits.set(k, { side, type, quality, hp: stats.hp, up: stats.up });
+      for (let dir = 0; dir < 6; dir++) {
+        const [dq, dr] = deltas[dir];
+        const nk = key(h.q + dq, h.r + dr);
+
+        // Only draw boundary edges: inside → outside.
+        if (inside.has(nk)) continue;
+
+        const [a, b] = edgeCornerIdx(dir);
+        path.moveTo(corners[a].x, corners[a].y);
+        path.lineTo(corners[b].x, corners[b].y);
+      }
+    }
+
+    return path;
   }
 
-  state.board.active.clear();
-  for (const k of nextActive) state.board.active.add(k);
+  function pickHex(px, py) {
+    let best = null;
+    let bestD2 = Infinity;
+    for (const h of board.active) {
+      const dx = px - h.cx;
+      const dy = py - h.cy;
+      const d2 = dx * dx + dy * dy;
+      if (d2 < bestD2) {
+        bestD2 = d2;
+        best = h;
+      }
+    }
+    if (!best) return null;
+    if (bestD2 > (R * R * 0.95)) return null;
+    return best;
+  }
 
-  state.board.terrain.clear();
-  for (const [k, t] of nextTerrain) state.board.terrain.set(k, t);
+  // --- Rendering
+  // Terrain is intentionally a *tint* over a shared base, not a repaint.
+  // That keeps the board calm while still making woods/hills/rough/water read instantly.
+  const TERRAIN_THEMES = {
+    // Classic tabletop parchment: subtle but readable.
+    classic: {
+      base: '#f4f2ea',
+      grid: 'rgba(0,0,0,0.35)',
+      tint: {
+        hills: 'rgba(183, 131, 43, 0.18)',  // warm ochre
+        woods: 'rgba(36, 122, 63, 0.20)',   // deep green
+        rough: 'rgba(107, 84, 70, 0.16)',   // brown-grey
+        water: 'rgba(30, 90, 170, 0.20)',   // river blue
+      },
+    },
+    // Vivid Dusk: more saturation without turning the map into a neon quilt.
+    vivid: {
+      base: '#f4f2ea',
+      grid: 'rgba(0,0,0,0.35)',
+      tint: {
+        hills: 'rgba(183, 131, 43, 0.26)',
+        woods: 'rgba(36, 122, 63, 0.28)',
+        rough: 'rgba(107, 84, 70, 0.22)',
+        water: 'rgba(30, 90, 170, 0.28)',
+      },
+    },
+    // Dark UI chrome option (kept because some people love it).
+    dusk: {
+      base: '#2f2d28',
+      grid: 'rgba(255,255,255,0.14)',
+      tint: {
+        hills: 'rgba(183, 131, 43, 0.14)',
+        woods: 'rgba(36, 122, 63, 0.16)',
+        rough: 'rgba(107, 84, 70, 0.13)',
+        water: 'rgba(30, 90, 170, 0.16)',
+      },
+    },
+  };
 
-  state.units.clear();
-  for (const [k, u] of nextUnits) state.units.set(k, u);
+  const TERRAIN_THEME_ORDER = ['vivid', 'classic', 'dusk'];
 
-  state.boardMetrics = computeBoardMetricsFromActive(state.board.active);
+  function terrainTheme() {
+    const theme = state.terrainTheme || 'vivid';
+    return TERRAIN_THEMES[theme] || TERRAIN_THEMES.vivid;
+  }
 
-  state.selection.selectedKey = null;
-  clearMoveOverlay();
+  function terrainBaseFill() {
+    return terrainTheme().base || '#f4f2ea';
+  }
 
-  state.play.turnSide = 'blue';
-  state.play.actsLeft = CONFIG.activationsPerTurn;
+  function terrainTint(t) {
+    if (!t || t === 'clear') return null;
+    const pal = terrainTheme();
+    return (pal.tint && pal.tint[t]) ? pal.tint[t] : null;
+  }
 
-  ioSetStatus(`Imported: active=${nextActive.size}, terrain=${nextTerrain.size}, units=${nextUnits.size}. Skipped: active=${skippedActive}, terrain=${skippedTerrain}, units=${skippedUnits}.`);
-  logEvent(`io:import ok (active=${nextActive.size} terrain=${nextTerrain.size} units=${nextUnits.size})`);
-  logEvent(`TURN BLUE (acts=${state.play.actsLeft})`);
-}
+  function gridStroke() {
+    return terrainTheme().grid || '#111';
+  }
+function unitColors(side) {
+    return side === 'blue'
+      ? { fill: '#0b3d91', stroke: '#8fb4ff', text: '#eaf2ff' }
+      : { fill: '#7a1111', stroke: '#ff9a9a', text: '#ffecec' };
+  }
 
-/* ========= UI Sync ========= */
-
-function syncTurnUI(){
-  const badge = document.getElementById('turnSideBadge');
-  const acts = document.getElementById('actsLeft');
-  const hint = document.getElementById('turnHint');
-  const passBtn = document.getElementById('passBtn');
-  const endBtn = document.getElementById('endTurnBtn');
-
-  if (badge) badge.textContent = state.play.turnSide.toUpperCase();
-  if (acts) acts.textContent = String(state.play.actsLeft);
-
-  const playOn = (state.mode === 'play');
-  const canPass = canPassSelected();
-
-  if (passBtn) passBtn.disabled = !(playOn && canPass);
-  if (endBtn) endBtn.disabled = !playOn;
-
-  if (hint){
-    if (!playOn){
-      hint.textContent = 'Turn controls are active in Play mode only.';
-    }else if (state.play.actsLeft === 0){
-      hint.textContent = 'No activations left. Click End Turn.';
-    }else if (!state.selection.selectedKey){
-      hint.textContent = 'Click a unit to select it. Move hexes show for friendly units.';
-    }else{
-      const u = selectedUnit();
-      if (!u) hint.textContent = 'Selection empty. Click a unit.';
-      else if (u.side !== state.play.turnSide) hint.textContent = 'Selected unit is not on the current side. No moves.';
-      else hint.textContent = 'Click a blue-dashed hex to move (spends 1 act).';
+  function qualityStroke(q) {
+    switch (q) {
+      case 'veteran': return '#d7b84b';
+      case 'regular': return '#d0d0d0';
+      default: return '#57d26a';
     }
   }
-}
 
-function syncSidebar(){
-  // Mode buttons
-  const playBtn = $('modePlayBtn');
-  const editBtn = $('modeEditBtn');
-  playBtn.classList.toggle('isActive', state.mode === 'play');
-  editBtn.classList.toggle('isActive', state.mode === 'edit');
+  function draw() {
+    ctx.clearRect(0, 0, elCanvas.width, elCanvas.height);
 
-  $('modeHint').textContent = (state.mode === 'play')
-    ? 'Play mode (editor disabled)'
-    : 'Edit mode (tools enabled)';
+    // Background
+    ctx.fillStyle = '#0b0b0d';
+    ctx.fillRect(0, 0, elCanvas.width, elCanvas.height);
 
-  const editOn = (state.mode === 'edit');
+    // Hexes
+    for (const h of board.active) {
+      const p = hexPath(h.cx, h.cy);
+      ctx.fillStyle = terrainBaseFill();
+      ctx.fill(p);
 
-  // Tools
-  const shapeBtn = $('toolShape');
-  const terrBtn  = $('toolTerrain');
-  const unitsBtn = $('toolUnits');
+      const tint = terrainTint(h.terrain);
+      if (tint) {
+        ctx.fillStyle = tint;
+        ctx.fill(p);
+      }
 
-  shapeBtn.disabled = !editOn;
-  terrBtn.disabled  = !editOn;
-  unitsBtn.disabled = !editOn;
+      // Outline
+      ctx.strokeStyle = gridStroke();
+      ctx.lineWidth = 2;
+      ctx.stroke(p);
 
-  shapeBtn.classList.toggle('isActive', editOn && state.tool === 'shape');
-  terrBtn.classList.toggle('isActive',  editOn && state.tool === 'terrain');
-  unitsBtn.classList.toggle('isActive', editOn && state.tool === 'units');
+      // Overlays
+      const k = h.k;
+      if (state.mode === 'play' && state.selectedKey) {
+        if (state._moveTargets?.has(k)) {
+          ctx.strokeStyle = '#4aa3ff';
+          ctx.lineWidth = 3;
+          ctx.setLineDash([6, 6]);
+          ctx.stroke(p);
+          ctx.setLineDash([]);
+        }
+        if (state._attackTargets?.has(k)) {
+          ctx.strokeStyle = '#ff5050';
+          ctx.lineWidth = 3;
+          ctx.setLineDash([6, 6]);
+          ctx.stroke(p);
+          ctx.setLineDash([]);
+        }
+      }
 
-  const toolHint = $('toolHint');
-  if (!editOn) toolHint.textContent = 'Switch to Edit mode to use tools.';
-  else if (state.tool === 'shape') toolHint.textContent = 'Shape: hover highlights; click toggles active/inactive.';
-  else if (state.tool === 'terrain') toolHint.textContent = 'Terrain: click or click-drag to paint. Clear erases.';
-  else toolHint.textContent = 'Units: click empty hex to place; click unit to remove.';
+      // Hover
+      if (state._hoverKey === k) {
+        ctx.strokeStyle = '#ffffff55';
+        ctx.lineWidth = 3;
+        ctx.stroke(p);
+      }
+    }
 
-  // Terrain palette
-  for (const btn of document.querySelectorAll('#terrainPalette .terrainBtn')){
-    btn.disabled = !editOn;
-    const t = btn.getAttribute('data-terrain') || 'clear';
-    btn.classList.toggle('isActive', editOn && t === state.terrainBrush);
-  }
+    // Command radius outlines (truthy, but calm): dotted orange perimeter.
+    if (state.mode === 'play' && state.showCommand) {
+      for (const [hk, u] of unitsByHex) {
+        if (u.type !== 'gen') continue;
 
-  // Unit palette
-  const typeIsGen = (state.unitBrush.type === 'GEN');
+        const p = commandOutlinePath(hk);
+        if (!p) continue;
 
-  for (const btn of document.querySelectorAll('.unitBtn[data-side]')){
-    btn.disabled = !editOn;
-    const s = btn.getAttribute('data-side');
-    btn.classList.toggle('isActive', editOn && s === state.unitBrush.side);
-  }
+        const isSel = (state.selectedKey === hk);
+        const isTurnSide = (u.side === state.side);
+        const alpha = isSel ? 0.95 : (isTurnSide ? 0.80 : 0.30);
+        // Thicker + slightly darker so the command perimeter reads clearly.
+        const lw = (isSel ? 3 : (isTurnSide ? 2.25 : 1.75)) * 2;
 
-  for (const btn of document.querySelectorAll('.unitBtn[data-utype]')){
-    btn.disabled = !editOn;
-    const t = btn.getAttribute('data-utype');
-    btn.classList.toggle('isActive', editOn && t === state.unitBrush.type);
-  }
+        ctx.save();
+        ctx.strokeStyle = `rgba(210, 118, 0, ${alpha})`;
+        ctx.lineWidth = lw;
+        ctx.setLineDash([4, 6]);
+        ctx.lineCap = 'round';
+        ctx.stroke(p);
+        ctx.restore();
+      }
+    }
 
-  for (const btn of document.querySelectorAll('.unitBtn[data-quality]')){
-    const q = btn.getAttribute('data-quality');
-    btn.disabled = !editOn || (typeIsGen && q !== 'green');
-    btn.classList.toggle('isActive', editOn && q === (typeIsGen ? 'green' : state.unitBrush.quality));
-  }
+    // Units
+    for (const [hk, u] of unitsByHex) {
+      const h = board.byKey.get(hk);
+      if (!h) continue;
 
-  // Scenario IO
-  $('exportBtn').disabled = false;
-  $('importBtn').disabled = !editOn;
-  $('demoSetupBtn').disabled = !editOn;
-  $('clearUnitsBtn').disabled = !editOn;
+      const isPlay = (state.mode === 'play') && !state.gameOver;
+      const isTurnSide = isPlay && (u.side === state.side);
+      const isSpent = isTurnSide && state.actedUnitIds.has(u.id);
+      const isCmdLocked = isTurnSide && !isSpent && (state.actsUsed < ACT_LIMIT) &&
+        (!unitIgnoresCommand(u)) && (u.quality === 'green') && (!inCommandAt(hk, u.side));
 
-  syncTurnUI();
-}
+      // Visual friction: spent units and unorderable greens read as "not available".
+      // - spent: dim
+      // - green out-of-command: dim + dashed orange ring
+      const alpha = isSpent ? 0.38 : (isCmdLocked ? 0.48 : 1.0);
 
-function render(canvas, ctx, frameHexes){
-  const w = canvas.clientWidth;
-  const h = canvas.clientHeight;
+      const c = unitColors(u.side);
 
-  ctx.clearRect(0, 0, w, h);
-  ctx.fillStyle = '#0b0b0e';
-  ctx.fillRect(0, 0, w, h);
+      ctx.save();
+      ctx.globalAlpha = alpha;
 
-  computeLayout(frameHexes, canvas);
+      // Token disc
+      ctx.beginPath();
+      ctx.arc(h.cx, h.cy, R * 0.55, 0, Math.PI * 2);
+      ctx.fillStyle = c.fill;
+      ctx.fill();
 
-  // frame outlines
-  ctx.lineWidth = 1;
-  ctx.strokeStyle = 'rgba(255,255,255,0.06)';
-  for (const hex of frameHexes){
-    const p = axialToPixel(hex.q, hex.r, CONFIG.hexSize);
-    const cx = p.x + view.ox;
-    const cy = p.y + view.oy;
-    const pts = hexCorners(cx, cy, CONFIG.hexSize - 1);
-    drawHexPath(ctx, pts);
-    ctx.stroke();
-  }
-
-  // active + terrain tint
-  ctx.lineWidth = 1;
-  ctx.strokeStyle = '#2a2a36';
-  for (const k of state.board.active){
-    const hex = parseKey(k);
-    const p = axialToPixel(hex.q, hex.r, CONFIG.hexSize);
-    const cx = p.x + view.ox;
-    const cy = p.y + view.oy;
-    const pts = hexCorners(cx, cy, CONFIG.hexSize - 1);
-
-    const tid = getTerrainIdAtKey(k);
-    ctx.fillStyle = (TERRAIN[tid] ? TERRAIN[tid].fill : TERRAIN.clear.fill);
-
-    drawHexPath(ctx, pts);
-    ctx.fill();
-    ctx.stroke();
-  }
-
-  // MOVE TARGETS overlay (Play)
-  if (state.mode === 'play' && state.selection.canMove && state.selection.moveTargets.size > 0){
-    ctx.save();
-    ctx.setLineDash([6, 6]);
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = 'rgba(120,170,255,0.55)';
-
-    for (const k of state.selection.moveTargets){
-      const hex = parseKey(k);
-      const p = axialToPixel(hex.q, hex.r, CONFIG.hexSize);
-      const cx = p.x + view.ox;
-      const cy = p.y + view.oy;
-      const pts = hexCorners(cx, cy, CONFIG.hexSize - 1);
-      drawHexPath(ctx, pts);
+      // Token ring (quality)
+      ctx.lineWidth = Math.max(2, Math.floor(R * 0.12));
+      ctx.strokeStyle = qualityStroke(u.quality);
       ctx.stroke();
-    }
 
-    ctx.restore();
-  }
-
-  // PATH PREVIEW (Play hover)
-  if (state.mode === 'play' && state.selection.hoverPath && state.selection.hoverPath.length >= 2){
-    ctx.save();
-    ctx.setLineDash([3, 7]);
-    ctx.lineWidth = 3;
-    ctx.strokeStyle = 'rgba(140,200,255,0.35)';
-
-    ctx.beginPath();
-    for (let i = 0; i < state.selection.hoverPath.length; i++){
-      const k = state.selection.hoverPath[i];
-      const hex = parseKey(k);
-      const p = axialToPixel(hex.q, hex.r, CONFIG.hexSize);
-      const cx = p.x + view.ox;
-      const cy = p.y + view.oy;
-      if (i === 0) ctx.moveTo(cx, cy);
-      else ctx.lineTo(cx, cy);
-    }
-    ctx.stroke();
-    ctx.restore();
-  }
-
-  // units
-  for (const [k, unit] of state.units){
-    const hex = parseKey(k);
-    const p = axialToPixel(hex.q, hex.r, CONFIG.hexSize);
-    drawUnit(ctx, p.x + view.ox, p.y + view.oy, unit);
-  }
-
-  // selection outline (Play) — friend vs enemy color
-  if (state.mode === 'play' && state.selection.selectedKey){
-    const k = state.selection.selectedKey;
-    const u = selectedUnit();
-    const hex = parseKey(k);
-    const p = axialToPixel(hex.q, hex.r, CONFIG.hexSize);
-    const cx = p.x + view.ox;
-    const cy = p.y + view.oy;
-    const pts = hexCorners(cx, cy, CONFIG.hexSize - 1);
-
-    ctx.lineWidth = 3;
-    if (u && u.side === state.play.turnSide) ctx.strokeStyle = 'rgba(255,220,120,0.65)'; // friendly
-    else ctx.strokeStyle = 'rgba(200,200,215,0.35)'; // not current side
-    drawHexPath(ctx, pts);
-    ctx.stroke();
-  }
-
-  // hover outline (Edit only)
-  if (state.mode === 'edit' && state.ui.hover){
-    const hh = state.ui.hover;
-    const p = axialToPixel(hh.q, hh.r, CONFIG.hexSize);
-    const cx = p.x + view.ox;
-    const cy = p.y + view.oy;
-    const pts = hexCorners(cx, cy, CONFIG.hexSize - 1);
-
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = 'rgba(180,200,255,0.45)';
-    drawHexPath(ctx, pts);
-    ctx.stroke();
-  }
-
-  const hoverTxt = state.ui.hover ? `(${state.ui.hover.q},${state.ui.hover.r})` : '-';
-  const mismatchTxt = state.buildMismatch ? ' !!MISMATCH!!' : '';
-  const selTxt = state.selection.selectedKey ? state.selection.selectedKey : '-';
-  const selU = selectedUnit();
-  const selSide = selU ? selU.side.toUpperCase() : '-';
-  const mv = state.selection.moveTargets.size;
-  const canMoveTxt = state.selection.canMove ? 'YES' : 'NO';
-  const hCost = (state.selection.hoverCost != null) ? state.selection.hoverCost : '-';
-
-  setStatus(
-    `${GAME_NAME} | BUILD ${state.buildId} | HTML=${state.htmlBuild} JS=${state.buildId}${mismatchTxt} | ` +
-    `MODE ${state.mode.toUpperCase()} | TURN ${state.play.turnSide.toUpperCase()} acts=${state.play.actsLeft} | ` +
-    `sel=${selTxt} selSide=${selSide} canMove=${canMoveTxt} mv=${mv} hoverCost=${hCost} | last=${state.lastEvent}`
-  );
-}
-
-function getHtmlBuild(){
-  const meta = document.querySelector('meta[name="bannerfall-build"]');
-  return meta ? (meta.getAttribute('content') || '(empty)') : '(missing)';
-}
-
-function boot(){
-  state.htmlBuild = getHtmlBuild();
-  state.buildMismatch = (state.htmlBuild !== BUILD_ID);
-  if (state.buildMismatch){
-    ioSetStatus(`WARNING: Build mismatch (HTML=${state.htmlBuild}, JS=${BUILD_ID}). You are not seeing a coherent build.`);
-    state.lastEvent = `BUILD_MISMATCH html=${state.htmlBuild} js=${BUILD_ID}`;
-  }
-
-  const canvas = $('board');
-  const ctx = canvas.getContext('2d');
-  if (!ctx) throw new Error('Canvas 2D context unavailable');
-
-  const frameHexes = makeFrameHexes();
-
-  // init: all active
-  for (const h of frameHexes) state.board.active.add(hexKey(h.q, h.r));
-  state.boardMetrics = computeBoardMetricsFromActive(state.board.active);
-
-  // initial log
-  logEvent(`TURN ${state.play.turnSide.toUpperCase()} (acts=${state.play.actsLeft})`);
-
-  // Mode
-  $('modePlayBtn').addEventListener('click', () => { setMode('play'); rerender(); });
-  $('modeEditBtn').addEventListener('click', () => { setMode('edit'); rerender(); });
-
-  // Turn controls
-  $('passBtn').addEventListener('click', () => {
-    passActivation();
-    syncSidebar();
-    rerender();
-  });
-  $('endTurnBtn').addEventListener('click', () => {
-    endTurn();
-    syncSidebar();
-    rerender();
-  });
-
-  // Tools
-  $('toolShape').addEventListener('click', () => { if (state.mode==='edit'){ setTool('shape'); rerender(); } });
-  $('toolTerrain').addEventListener('click', () => { if (state.mode==='edit'){ setTool('terrain'); rerender(); } });
-  $('toolUnits').addEventListener('click', () => { if (state.mode==='edit'){ setTool('units'); rerender(); } });
-
-  // Terrain palette
-  for (const btn of document.querySelectorAll('#terrainPalette .terrainBtn')){
-    btn.addEventListener('click', () => {
-      if (state.mode !== 'edit') return;
-      const t = btn.getAttribute('data-terrain') || 'clear';
-      if (!VALID_TERRAIN.has(t)) return;
-      setTerrainBrush(t);
-      rerender();
-    });
-  }
-
-  // Unit palette
-  for (const btn of document.querySelectorAll('.unitBtn[data-side]')){
-    btn.addEventListener('click', () => {
-      if (state.mode !== 'edit') return;
-      const s = btn.getAttribute('data-side') || 'blue';
-      if (!VALID_SIDES.has(s)) return;
-      setUnitBrushSide(s);
-      rerender();
-    });
-  }
-  for (const btn of document.querySelectorAll('.unitBtn[data-utype]')){
-    btn.addEventListener('click', () => {
-      if (state.mode !== 'edit') return;
-      const t = btn.getAttribute('data-utype') || 'INF';
-      if (!VALID_TYPES.has(t)) return;
-      setUnitBrushType(t);
-      rerender();
-    });
-  }
-  for (const btn of document.querySelectorAll('.unitBtn[data-quality]')){
-    btn.addEventListener('click', () => {
-      if (state.mode !== 'edit') return;
-      const q = btn.getAttribute('data-quality') || 'regular';
-      if (!VALID_QUALS.has(q)) return;
-      setUnitBrushQuality(q);
-      rerender();
-    });
-  }
-
-  // Scenario IO
-  $('exportBtn').addEventListener('click', () => {
-    const box = $('ioBox');
-    const s = scenarioFromState();
-    box.value = JSON.stringify(s, null, 2);
-    ioSetStatus(`Exported JSON (${box.value.length} chars).`);
-    logEvent(`io:export (chars=${box.value.length})`);
-    rerender();
-  });
-
-  $('importBtn').addEventListener('click', () => {
-    if (state.mode !== 'edit'){
-      ioSetStatus('Import is disabled in Play mode. Click Edit first.');
-      return;
-    }
-    const box = $('ioBox');
-    const txt = box.value.trim();
-    if (!txt){
-      ioSetStatus('Import failed: textbox is empty.');
-      return;
-    }
-    try{
-      const obj = JSON.parse(txt);
-      importScenario(obj);
-      syncSidebar();
-      rerender();
-    }catch(e){
-      ioSetStatus(`Import failed: ${String(e && e.message ? e.message : e)}`);
-      logEvent('io:import error');
-      rerender();
-    }
-  });
-
-  $('demoSetupBtn').addEventListener('click', () => {
-    if (state.mode !== 'edit'){
-      ioSetStatus('Demo Setup requires Edit mode.');
-      return;
-    }
-    applyDemoSetup();
-    syncSidebar();
-    rerender();
-  });
-
-  $('clearUnitsBtn').addEventListener('click', () => {
-    if (state.mode !== 'edit'){
-      ioSetStatus('Clear Units requires Edit mode.');
-      return;
-    }
-    clearUnits();
-    ioSetStatus('Units cleared (turn reset to BLUE).');
-    syncSidebar();
-    rerender();
-  });
-
-  // Render helpers
-  function rerender(){
-    resizeCanvas(canvas, ctx);
-    render(canvas, ctx, frameHexes);
-  }
-
-  // Hover + terrain drag-paint + play path preview
-  canvas.addEventListener('mousemove', (ev) => {
-    const pt = getCanvasPoint(ev, canvas);
-    const h = pickHexAt(pt.x, pt.y);
-
-    const prev = state.ui.hover ? hexKey(state.ui.hover.q, state.ui.hover.r) : null;
-    const next = h ? hexKey(h.q, h.r) : null;
-
-    let didChange = false;
-    if (prev !== next){
-      state.ui.hover = h;
-      didChange = true;
-    }
-
-    // Play hover path preview
-    if (state.mode === 'play'){
-      state.selection.hoverPath = null;
-      state.selection.hoverCost = null;
-
-      if (h && state.selection.canMove){
-        const hk = hexKey(h.q, h.r);
-        if (state.selection.moveTargets.has(hk)){
-          const startKey = state.selection.selectedKey;
-          const path = buildPath(state.selection.movePrev, startKey, hk);
-          if (path){
-            state.selection.hoverPath = path;
-            state.selection.hoverCost = state.selection.moveCost.get(hk) ?? null;
-          }
-        }
+      // Selection ring
+      if (state.selectedKey === hk) {
+        ctx.beginPath();
+        ctx.arc(h.cx, h.cy, R * 0.70, 0, Math.PI * 2);
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = '#fff';
+        ctx.stroke();
       }
-      didChange = true; // we want immediate path feedback
-    }
+      // Text (BIG)
+      const def = UNIT_BY_ID.get(u.type);
+      // Make 3-letter blocks (INF/CAV/SKR) ~15–20% smaller for better balance
+      // against single-glyph tokens (2605, 27b6).
+      const textScale = (u.type === 'inf' || u.type === 'cav' || u.type === 'skr') ? 0.83 : 1.0;
+      const glyphScale = (u.type === 'arc') ? 2.5 : 1.0;
+      const fontPx = Math.floor(R * 0.55 * textScale * glyphScale);
+      ctx.font = `700 ${fontPx}px system-ui, -apple-system, Segoe UI, Roboto, sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = c.text;
+      const glyphY = h.cy + ((u.type === 'arc') ? -Math.floor(R * 0.10) : 1);
+      ctx.fillText(def.symbol, h.cx, glyphY);
+      // HP pips (tiny)
+      const pipR = Math.max(2, Math.floor(R * 0.07));
+      const startX = h.cx - (pipR * 2) * (def.hp - 1) * 0.5;
+      const y = h.cy + R * 0.78;
+      for (let i = 0; i < def.hp; i++) {
+        ctx.beginPath();
+        ctx.arc(startX + i * (pipR * 2), y, pipR, 0, Math.PI * 2);
+        ctx.fillStyle = (i < u.hp) ? '#fff' : '#ffffff33';
+        ctx.fill();
+      }
 
-    // Edit drag-paint
-    if (state.mode === 'edit' && state.tool === 'terrain' && state.ui.isPainting && (ev.buttons & 1) === 1){
-      if (h){
-        const k = hexKey(h.q, h.r);
-        if (k !== state.ui.lastPaintedKey){
-          paintTerrainAt(h.q, h.r);
-          state.ui.lastPaintedKey = k;
-          didChange = true;
-        }
+      ctx.restore();
+
+      // Extra indicator: green out-of-command can't be activated (dashed orange ring).
+      if (isCmdLocked) {
+        ctx.beginPath();
+        ctx.arc(h.cx, h.cy, R * 0.64, 0, Math.PI * 2);
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = 'rgba(255, 157, 0, 0.9)';
+        ctx.setLineDash([3, 4]);
+        ctx.stroke();
+        ctx.setLineDash([]);
       }
     }
+  }
 
-    if (didChange) rerender();
-  });
+  // --- UI helpers
+  function setActive(btn, isActive) {
+    btn.classList.toggle('active', isActive);
+  }
 
-  canvas.addEventListener('mouseleave', () => {
-    state.ui.hover = null;
-    state.ui.isPainting = false;
-    state.ui.lastPaintedKey = null;
+  function log(msg) {
+    state.last = msg;
+    elHudLast.textContent = msg;
 
-    state.selection.hoverPath = null;
-    state.selection.hoverCost = null;
+    state.events.push({ t: Date.now(), msg });
+    if (state.events.length > 50) state.events.shift();
+  }
 
-    rerender();
-  });
+  function totals(side) {
+    let up = 0;
+    let hp = 0;
+    let gens = 0;
+    let units = 0;
 
-  canvas.addEventListener('mousedown', (ev) => {
-    if (ev.button !== 0) return;
+    for (const u of unitsByHex.values()) {
+      if (u.side !== side) continue;
+      const def = UNIT_BY_ID.get(u.type);
+      up += def.up;
+      hp += u.hp;
+      units += 1;
+      if (u.type === 'gen') gens += 1;
+    }
 
-    const pt = getCanvasPoint(ev, canvas);
-    const h = pickHexAt(pt.x, pt.y);
+    return { up, hp, gens, units };
+  }
+
+  function updateHud() {
+    const blue = totals('blue');
+    const red = totals('red');
+
+    elHudTitle.textContent = `${GAME_NAME}  BUILD ${BUILD_ID}`;
+
+    const mode = state.mode.toUpperCase();
+    const meta = [
+      `MODE=${mode}`,
+      `TERRAIN=${(state.terrainTheme || 'vivid').toUpperCase()}`,
+      `TURN=${state.side.toUpperCase()}#${state.turn}`,
+      `ACT=${state.actsUsed}/${ACT_LIMIT}`,
+      `ACTIVE=${board.active.length}`,
+      `UNITS=${unitsByHex.size}`,
+      `FORCES: B ${blue.up}u/${blue.hp}hp • R ${red.up}u/${red.hp}hp`,
+      `CAP: B ${state.capturedUP.blue}u • R ${state.capturedUP.red}u`,
+      `VICTORY=${state.victoryMode.toUpperCase()}`,
+    ];
+    elHudMeta.textContent = meta.join('  ·  ');
+
+    elModeBtn.textContent = state.mode === 'edit' ? 'To Play' : 'To Edit';
+    setActive(elToolUnits, state.tool === 'units');
+    setActive(elToolTerrain, state.tool === 'terrain');
+
+    setActive(elSideBlue, state.editSide === 'blue');
+    setActive(elSideRed, state.editSide === 'red');
+
+    // Type buttons
+    for (const b of elTypeBtns.querySelectorAll('button[data-type]')) {
+      setActive(b, state.editType === b.dataset.type);
+    }
+    setActive(elEraseBtn, state.editErase);
+
+    // Quality buttons
+    setActive(elQualityGreen, state.editQuality === 'green');
+    setActive(elQualityRegular, state.editQuality === 'regular');
+    setActive(elQualityVeteran, state.editQuality === 'veteran');
+
+    // Terrain buttons
+    for (const b of elTerrainBtns.querySelectorAll('button[data-terrain]')) {
+      setActive(b, state.editTerrain === b.dataset.terrain);
+    }
+
+    elEndTurnBtn.disabled = (state.mode !== 'play') || state.gameOver;
+
+    draw();
+  }
+
+  // --- Rules helpers
+  function isOccupied(hk) {
+    return unitsByHex.has(hk);
+  }
+
+  function terrainMoveCost(unitType, terrainId) {
+    if (terrainId === 'water') return Infinity;
+    if (terrainId === 'clear') return 1;
+
+    // hills/woods/rough
+    return (unitType === 'cav') ? 3 : 2;
+  }
+
+  function isEngaged(hexKey, side) {
+    const h = board.byKey.get(hexKey);
+    if (!h) return false;
+
+    for (const nk of h.neigh) {
+      const u = unitsByHex.get(nk);
+      if (u && u.side !== side) return true;
+    }
+
+    return false;
+  }
+
+  function friendlyGeneralKeys(side) {
+    const out = [];
+    for (const [hk, u] of unitsByHex) {
+      if (u.side === side && u.type === 'gen') out.push(hk);
+    }
+    return out;
+  }
+
+  function inCommandAt(hexKey, side) {
+    const gens = friendlyGeneralKeys(side);
+    if (gens.length === 0) return false;
+
+    const h = board.byKey.get(hexKey);
+    if (!h) return false;
+
+    for (const gk of gens) {
+      const gh = board.byKey.get(gk);
+      if (!gh) continue;
+      const d = axialDistance(h.q, h.r, gh.q, gh.r);
+      if (d <= COMMAND_RADIUS) return true;
+    }
+    return false;
+  }
+
+  function unitIgnoresCommand(u) {
+    if (u.type === 'gen') return true;
+    if (u.type === 'cav') return true;
+    if (u.quality === 'veteran') return true;
+    return false;
+  }
+
+  function unitCanActivate(u, hexKey) {
+    if (state.mode !== 'play') return false;
+    if (state.gameOver) return false;
+    if (u.side !== state.side) return false;
+    if (state.actsUsed >= ACT_LIMIT) return false;
+    if (state.actedUnitIds.has(u.id)) return false;
+
+    // Green INF/ARC/SKR out-of-command cannot be activated at all.
+    if (!unitIgnoresCommand(u) && u.quality === 'green') {
+      const cmd = inCommandAt(hexKey, u.side);
+      if (!cmd) return false;
+    }
+
+    return true;
+  }
+
+  function activationBlockReason(u, hexKey) {
+    if (state.mode !== 'play') return 'Not in Play mode.';
+    if (state.gameOver) return 'Game over.';
+    if (u.side !== state.side) return null; // stay calm; don’t narrate enemy clicks
+    if (state.actsUsed >= ACT_LIMIT) return 'No activations left — End Turn.';
+    if (state.actedUnitIds.has(u.id)) return 'Already acted this turn.';
+
+    if (!unitIgnoresCommand(u) && u.quality === 'green') {
+      const cmd = inCommandAt(hexKey, u.side);
+      if (!cmd) return `Out of command: Green units need a GEN within ${COMMAND_RADIUS}.`;
+    }
+
+    return null;
+  }
+
+  function unitCanMoveThisActivation(u, actCtx, startKey) {
+    // Engagement makes the line sticky.
+    const engaged = isEngaged(startKey, u.side);
+
+    // Skirmishers have a special disengage.
+    if (engaged) {
+      return u.type === 'skr';
+    }
+
+    // Command dependence
+    if (unitIgnoresCommand(u)) return true;
+
+    // Regular INF/ARC/SKR require command to move.
+    if (u.quality === 'regular') return !!actCtx.inCommandStart;
+
+    // Green INF/ARC/SKR require command to move (but if green, activation gating already enforced).
+    return !!actCtx.inCommandStart;
+  }
+
+  // --- Movement (MP + terrain costs)
+  function computeMoveTargets(fromKey, u, actCtx) {
+    const def = UNIT_BY_ID.get(u.type);
+    const mp = def.move;
+
+    // If movement isn't allowed, return empty set.
+    if (!unitCanMoveThisActivation(u, actCtx, fromKey)) return new Set();
+
+    const engaged = isEngaged(fromKey, u.side);
+
+    // Skirmisher disengage: exactly 1 hex to a destination not adjacent to ANY enemy.
+    if (u.type === 'skr' && engaged) {
+      const out = new Set();
+      const h = board.byKey.get(fromKey);
+      if (!h) return out;
+
+      for (const nk of h.neigh) {
+        if (isOccupied(nk)) continue;
+        const nh = board.byKey.get(nk);
+        if (!nh) continue;
+
+        const cost = terrainMoveCost(u.type, nh.terrain);
+        if (!Number.isFinite(cost) || cost > mp) continue;
+
+        // Must end NOT adjacent to any enemy.
+        if (isEngaged(nk, u.side)) continue;
+
+        out.add(nk);
+      }
+
+      return out;
+    }
+
+    // Normal movement: least-cost reachability within MP budget.
+    const out = new Set();
+    const best = new Map();
+
+    // Tiny board → a simple priority queue is fine.
+    const pq = [{ k: fromKey, c: 0 }];
+    best.set(fromKey, 0);
+
+    while (pq.length) {
+      // pop min cost
+      pq.sort((a, b) => a.c - b.c);
+      const cur = pq.shift();
+      if (!cur) break;
+
+      const h = board.byKey.get(cur.k);
+      if (!h) continue;
+
+      for (const nk of h.neigh) {
+        if (isOccupied(nk)) continue;
+        const nh = board.byKey.get(nk);
+        if (!nh) continue;
+
+        const stepCost = terrainMoveCost(u.type, nh.terrain);
+        if (!Number.isFinite(stepCost)) continue; // water/impassable
+
+        const nc = cur.c + stepCost;
+        if (nc > mp) continue;
+
+        const prevBest = best.get(nk);
+        if (prevBest !== undefined && nc >= prevBest) continue;
+
+        best.set(nk, nc);
+        out.add(nk);
+        pq.push({ k: nk, c: nc });
+      }
+    }
+
+    return out;
+  }
+
+  // --- Attacks (melee + ranged)
+  function attackDiceFor(attackerKey, defenderKey, attackerUnit) {
+    const atkHex = board.byKey.get(attackerKey);
+    const defHex = board.byKey.get(defenderKey);
+    if (!atkHex || !defHex) return null;
+
+    const dist = axialDistance(atkHex.q, atkHex.r, defHex.q, defHex.r);
+    if (dist < 1) return null;
+
+    const engaged = isEngaged(attackerKey, attackerUnit.side);
+    const atkDef = UNIT_BY_ID.get(attackerUnit.type);
+
+    // Melee at range 1 is always possible.
+    if (dist === 1) {
+      return { kind: 'melee', dist, dice: atkDef.meleeDice };
+    }
+
+    // Beyond range 1 requires ranged capability and NOT being engaged.
+    if (engaged) return null;
+    if (!atkDef.ranged) return null;
+
+    const dice = atkDef.ranged[dist];
+    if (!dice) return null;
+
+    return { kind: 'ranged', dist, dice };
+  }
+
+  function computeAttackTargets(attackerKey, u) {
+    const targets = new Set();
+
+    for (const [hk, enemy] of unitsByHex) {
+      if (enemy.side === u.side) continue;
+      const prof = attackDiceFor(attackerKey, hk, u);
+      if (prof) targets.add(hk);
+    }
+
+    return targets;
+  }
+
+  // --- Combat resolution
+  function rollD6() {
+    return 1 + Math.floor(Math.random() * 6);
+  }
+
+  function retreatPick(attackerKey, defenderKey) {
+    // Choose retreat direction purely by geometry (maximizes distance), then
+    // if the chosen hex is invalid (off-board/water/occupied), retreat converts to a hit.
+
+    const aHex = board.byKey.get(attackerKey);
+    const dHex = board.byKey.get(defenderKey);
+    if (!aHex || !dHex) return null;
+
+    const curDist = axialDistance(aHex.q, aHex.r, dHex.q, dHex.r);
+
+    const deltas = (dHex.r & 1) ? NEIGH_ODD : NEIGH_EVEN;
+
+    let bestKey = null;
+    let bestDist = curDist;
+
+    for (const [dq, dr] of deltas) {
+      const nq = dHex.q + dq;
+      const nr = dHex.r + dr;
+      const nd = axialDistance(aHex.q, aHex.r, nq, nr);
+      if (nd > bestDist) {
+        bestDist = nd;
+        bestKey = key(nq, nr);
+      }
+    }
+
+    if (!bestKey) return null;
+
+    // Validate the chosen retreat hex.
+    if (!board.activeSet.has(bestKey)) return null;
+
+    const bh = board.byKey.get(bestKey);
+    if (!bh) return null;
+
+    if (bh.terrain === 'water') return null;
+    if (isOccupied(bestKey)) return null;
+
+    return bestKey;
+  }
+
+  function consumeActivation(unitId) {
+    state.actsUsed = Math.min(ACT_LIMIT, state.actsUsed + 1);
+    state.actedUnitIds.add(unitId);
+  }
+
+  function destroyUnit(defenderKey, defenderUnit, attackerSide) {
+    const defDef = UNIT_BY_ID.get(defenderUnit.type);
+
+    unitsByHex.delete(defenderKey);
+
+    state.capturedUP[attackerSide] += defDef.up;
+
+    log(`☠️ ${defenderUnit.side.toUpperCase()} ${defDef.abbrev} destroyed (+${defDef.up}u).`);
+  }
+
+  function resolveAttack(attackerKey, defenderKey) {
+    const atk = unitsByHex.get(attackerKey);
+    const defU = unitsByHex.get(defenderKey);
+    if (!atk || !defU) return;
+    if (state.gameOver) return;
+
+    const prof = attackDiceFor(attackerKey, defenderKey, atk);
+    if (!prof) {
+      log('Illegal attack.');
+      return;
+    }
+
+    // Terrain defensive modifier: defender in woods => -1 die (min 1)
+    const defHex = board.byKey.get(defenderKey);
+    let dice = prof.dice;
+    if (defHex && defHex.terrain === 'woods') {
+      dice = Math.max(1, dice - 1);
+    }
+
+    const rolls = [];
+    for (let i = 0; i < dice; i++) rolls.push(rollD6());
+
+    const atkDef = UNIT_BY_ID.get(atk.type);
+    const defDef = UNIT_BY_ID.get(defU.type);
+
+    const hits = rolls.filter(v => DIE_HIT.has(v)).length;
+    const retreats = rolls.filter(v => v === DIE_RETREAT).length;
+
+    const tag = `${atk.side.toUpperCase()} ${atkDef.abbrev}`;
+    const vs = `${defU.side.toUpperCase()} ${defDef.abbrev}`;
+    log(`${tag} ${prof.kind}→${vs} (d${prof.dist}) [${rolls.join(', ')}]`);
+
+    // Pass 1: apply hits
+    if (hits > 0) {
+      defU.hp -= hits;
+      log(`Hits: ${hits} → ${vs} HP=${Math.max(0, defU.hp)}.`);
+    }
+
+    if (defU.hp <= 0) {
+      destroyUnit(defenderKey, defU, atk.side);
+      checkVictory();
+      updateHud();
+      return;
+    }
+
+    // Pass 2: resolve retreats one at a time
+    for (let i = 0; i < retreats; i++) {
+      const curDef = unitsByHex.get(defenderKey);
+      if (!curDef) break;
+
+      const step = retreatPick(attackerKey, defenderKey);
+      if (!step) {
+        curDef.hp -= 1;
+        log(`Retreat blocked → 1 hit. ${vs} HP=${Math.max(0, curDef.hp)}.`);
+        if (curDef.hp <= 0) {
+          destroyUnit(defenderKey, curDef, atk.side);
+          break;
+        }
+      } else {
+        unitsByHex.delete(defenderKey);
+        unitsByHex.set(step, curDef);
+        defenderKey = step;
+        log(`Retreat → ${step}`);
+      }
+    }
+
+    checkVictory();
+    updateHud();
+  }
+
+  // --- Victory
+  function checkVictory() {
+    if (state.mode !== 'play') return;
+
+    const b = totals('blue');
+    const r = totals('red');
+
+    let blueWins = false;
+    let redWins = false;
+
+    if (state.victoryMode === 'annihilation') {
+      blueWins = r.units === 0;
+      redWins = b.units === 0;
+    } else if (state.victoryMode === 'decapitation') {
+      blueWins = r.gens === 0;
+      redWins = b.gens === 0;
+    } else {
+      // Clear victory: capture at least half of opponent starting UP, rounded up.
+      const needBlue = Math.ceil(state.initialUP.red / 2);
+      const needRed = Math.ceil(state.initialUP.blue / 2);
+
+      blueWins = state.capturedUP.blue >= needBlue;
+      redWins = state.capturedUP.red >= needRed;
+    }
+
+    if (blueWins && redWins) {
+      // If multiple victory conditions ever trigger simultaneously, the acting player wins.
+      state.gameOver = true;
+      state.winner = state.side;
+      log(`Game over: ${state.side.toUpperCase()} wins (simultaneous victory).`);
+    } else if (blueWins) {
+      state.gameOver = true;
+      state.winner = 'blue';
+      log('Game over: BLUE wins.');
+    } else if (redWins) {
+      state.gameOver = true;
+      state.winner = 'red';
+      log('Game over: RED wins.');
+    }
+  }
+
+  // --- Mode transitions
+  function clearSelection() {
+    state.selectedKey = null;
+    state.act = null;
+    state._moveTargets = null;
+    state._attackTargets = null;
+  }
+
+  function enterEdit() {
+    state.mode = 'edit';
+    state.tool = 'units';
+
+    state.gameOver = false;
+    state.winner = null;
+
+    clearSelection();
+
+    log('Edit: place units / paint terrain.');
+    updateHud();
+  }
+
+  function enterPlay() {
+    state.mode = 'play';
+    state.turn = 1;
+    state.side = 'blue';
+    state.actsUsed = 0;
+    state.actedUnitIds = new Set();
+
+    state.gameOver = false;
+    state.winner = null;
+
+    // Lock initial UP for Clear Victory.
+    state.initialUP.blue = totals('blue').up;
+    state.initialUP.red = totals('red').up;
+
+    // Reset capture tally.
+    state.capturedUP.blue = 0;
+    state.capturedUP.red = 0;
+
+    clearSelection();
+
+    log('Play: click a friendly unit. Blue goes first.');
+    updateHud();
+  }
+
+  // --- Editing actions
+  function normalizeQuality(type, quality) {
+    // Baseline: generals display as Green.
+    if (type === 'gen') return 'green';
+    if (!QUALITY_ORDER.includes(quality)) return 'green';
+    return quality;
+  }
+
+  function placeOrReplaceUnit(hexKey) {
+    const h = board.byKey.get(hexKey);
     if (!h) return;
 
-    const k = hexKey(h.q, h.r);
-
-    // PLAY MODE: select OR move
-    if (state.mode === 'play'){
-      if (state.units.has(k)){
-        selectAtKey(k);
-        syncSidebar();
-        rerender();
-        return;
-      }
-
-      // click reachable destination
-      if (state.selection.canMove && state.selection.moveTargets.has(k)){
-        tryMoveTo(k);
-        syncSidebar();
-        rerender();
-        return;
-      }
-
-      // click empty = clear selection
-      selectAtKey(null);
-      syncSidebar();
-      rerender();
+    if (state.editErase) {
+      if (unitsByHex.delete(hexKey)) log(`Erased unit at ${hexKey}`);
+      updateHud();
       return;
     }
 
-    // EDIT MODE actions
-    if (state.mode !== 'edit') return;
+    const type = state.editType;
+    const def = UNIT_BY_ID.get(type);
+    if (!def) return;
 
-    if (state.tool === 'shape'){
-      toggleActiveHex(h.q, h.r);
-      syncSidebar();
-      rerender();
-      return;
+    const quality = normalizeQuality(type, state.editQuality);
+
+    const existing = unitsByHex.get(hexKey);
+    if (existing) {
+      existing.side = state.editSide;
+      existing.type = type;
+      existing.quality = quality;
+      existing.hp = def.hp;
+      log(`Replaced at ${hexKey} → ${state.editSide} ${def.abbrev}`);
+    } else {
+      unitsByHex.set(hexKey, {
+        id: nextUnitId++,
+        side: state.editSide,
+        type,
+        quality,
+        hp: def.hp,
+      });
+      log(`Placed ${state.editSide} ${def.abbrev} at ${hexKey}`);
     }
 
-    if (state.tool === 'terrain'){
-      state.ui.isPainting = true;
-      state.ui.lastPaintedKey = null;
-      paintTerrainAt(h.q, h.r);
-      state.ui.lastPaintedKey = k;
-      syncSidebar();
-      rerender();
-      return;
-    }
-
-    if (state.tool === 'units'){
-      if (!state.board.active.has(k)) return;
-      if (state.units.has(k)) removeUnitAt(h.q, h.r);
-      else placeUnitAt(h.q, h.r);
-      syncSidebar();
-      rerender();
-      return;
-    }
-  });
-
-  window.addEventListener('mouseup', () => {
-    if (state.ui.isPainting){
-      state.ui.isPainting = false;
-      state.ui.lastPaintedKey = null;
-      logEvent('paint:up');
-      rerender();
-    }
-  });
-
-  syncSidebar();
-  rerender();
-
-  window.BANNERFALL = { state, CONFIG, TERRAIN };
-}
-
-window.addEventListener('DOMContentLoaded', () => {
-  try{
-    boot();
-  }catch(err){
-    console.error(err);
-    const msg = (err && err.message) ? err.message : String(err);
-    const status = document.getElementById('statusLine');
-    if (status) status.textContent = `BOOT ERROR | BUILD ${BUILD_ID} | ${msg}`;
+    updateHud();
   }
-});
+
+  function paintTerrain(hexKey) {
+    const h = board.byKey.get(hexKey);
+    if (!h) return;
+    h.terrain = state.editTerrain;
+    log(`Terrain ${state.editTerrain} at ${hexKey}`);
+    updateHud();
+  }
+
+  function clearUnits() {
+    unitsByHex.clear();
+    nextUnitId = 1;
+    log('Cleared all units.');
+    updateHud();
+  }
+
+  function resetTerrain() {
+    for (const h of board.active) h.terrain = 'clear';
+  }
+
+  function loadScenario(name) {
+    const sc = SCENARIOS[name];
+    if (!sc) return;
+
+    enterEdit();
+    clearUnits();
+    resetTerrain();
+
+    // Terrain paint
+    for (const t of (sc.terrain || [])) {
+      const k = key(t.q, t.r);
+      const h = board.byKey.get(k);
+      if (!h) continue;
+      h.terrain = t.terrain;
+    }
+
+    // Units
+    for (const u of (sc.units || [])) {
+      const k = key(u.q, u.r);
+      if (!board.activeSet.has(k)) continue;
+      const def = UNIT_BY_ID.get(u.type);
+      if (!def) continue;
+      unitsByHex.set(k, {
+        id: nextUnitId++,
+        side: u.side,
+        type: u.type,
+        quality: normalizeQuality(u.type, u.quality || 'green'),
+        hp: def.hp,
+      });
+    }
+
+    log(`Loaded scenario: ${name}`);
+    updateHud();
+  }
+
+  // --- Turn handling
+  function endTurn() {
+    if (state.mode !== 'play') return;
+    if (state.gameOver) return;
+
+    state.side = (state.side === 'blue') ? 'red' : 'blue';
+    if (state.side === 'blue') state.turn += 1;
+
+    state.actsUsed = 0;
+    state.actedUnitIds = new Set();
+
+    clearSelection();
+
+    log(`Turn ${state.turn}: ${state.side.toUpperCase()}.`);
+    updateHud();
+  }
+
+  // --- Play interaction
+  function selectUnit(hexKey) {
+    const u = unitsByHex.get(hexKey);
+    if (!u) return;
+
+    if (!unitCanActivate(u, hexKey)) return;
+
+    const inCmd = unitIgnoresCommand(u) ? true : inCommandAt(hexKey, u.side);
+
+    state.selectedKey = hexKey;
+    state.act = {
+      unitId: u.id,
+      committed: false,
+      moved: false,
+      attacked: false,
+      inCommandStart: inCmd,
+    };
+
+    // Precompute targets
+    state._moveTargets = computeMoveTargets(hexKey, u, state.act);
+    state._attackTargets = computeAttackTargets(hexKey, u);
+
+    const def = UNIT_BY_ID.get(u.type);
+    const engaged = isEngaged(hexKey, u.side);
+    const notes = [];
+
+    if (engaged) {
+      if (u.type === 'skr') notes.push('Engaged: SKR may disengage 1 hex.');
+      else notes.push('Engaged: cannot move.');
+    } else if (!unitIgnoresCommand(u) && u.quality === 'regular' && !inCmd) {
+      notes.push('Out of command: cannot move (can attack).');
+    }
+
+    log(`Selected ${u.side.toUpperCase()} ${def.abbrev}.${notes.length ? ' ' + notes.join(' ') : ''}`);
+    updateHud();
+  }
+
+  function moveSelectedTo(destKey) {
+    const fromKey = state.selectedKey;
+    if (!fromKey || !state.act) return;
+
+    const u = unitsByHex.get(fromKey);
+    if (!u) return;
+
+    if (state.act.moved || state.act.attacked) {
+      log('Illegal move (already acted).');
+      return;
+    }
+
+    if (!state._moveTargets || !state._moveTargets.has(destKey)) {
+      log('Illegal move.');
+      return;
+    }
+
+    // Commit activation on the FIRST real action.
+    if (!state.act.committed) {
+      consumeActivation(u.id);
+      state.act.committed = true;
+    }
+
+    unitsByHex.delete(fromKey);
+    unitsByHex.set(destKey, u);
+    state.selectedKey = destKey;
+    state.act.moved = true;
+
+    log(`Moved to ${destKey}.`);
+
+    // After moving, you may make at most ONE attack (same activation).
+    state._moveTargets = null;
+    state._attackTargets = computeAttackTargets(destKey, u);
+
+    updateHud();
+  }
+
+  function attackFromSelection(targetKey) {
+    const attackerKey = state.selectedKey;
+    if (!attackerKey || !state.act) return;
+
+    const atk = unitsByHex.get(attackerKey);
+    if (!atk) return;
+
+    if (state.act.attacked) {
+      log('Illegal attack (already attacked).');
+      return;
+    }
+
+    // Validate target exists and is enemy.
+    const enemy = unitsByHex.get(targetKey);
+    if (!enemy || enemy.side === atk.side) {
+      log('Illegal attack target.');
+      return;
+    }
+
+    if (!state._attackTargets || !state._attackTargets.has(targetKey)) {
+      log('Illegal attack.');
+      return;
+    }
+
+    // Commit activation on the FIRST real action.
+    if (!state.act.committed) {
+      consumeActivation(atk.id);
+      state.act.committed = true;
+    }
+
+    resolveAttack(attackerKey, targetKey);
+
+    state.act.attacked = true;
+
+    // End activation after attack.
+    clearSelection();
+    updateHud();
+  }
+
+  function passSelected() {
+    if (state.mode !== 'play') return;
+    if (!state.selectedKey || !state.act) return;
+
+    const u = unitsByHex.get(state.selectedKey);
+    if (!u) return;
+
+    if (state.act.committed) {
+      log('Pass not available (already committed).');
+      return;
+    }
+
+    consumeActivation(u.id);
+    state.act.committed = true;
+    log(`Pass: ${u.side.toUpperCase()} ${UNIT_BY_ID.get(u.type).abbrev}.`);
+
+    clearSelection();
+    updateHud();
+  }
+
+  function clickPlay(hexKey) {
+    const clickedUnit = unitsByHex.get(hexKey);
+
+    // If nothing selected: try to select.
+    if (!state.selectedKey) {
+      if (clickedUnit) {
+        const reason = activationBlockReason(clickedUnit, hexKey);
+        if (reason) {
+          log(reason);
+          updateHud();
+          return;
+        }
+        if (unitCanActivate(clickedUnit, hexKey)) selectUnit(hexKey);
+      }
+      return;
+    }
+
+    const selKey = state.selectedKey;
+    const selUnit = unitsByHex.get(selKey);
+    if (!selUnit) {
+      clearSelection();
+      updateHud();
+      return;
+    }
+
+    // Clicking the selected hex toggles deselect.
+    if (hexKey === selKey) {
+      clearSelection();
+      log('Deselected.');
+      updateHud();
+      return;
+    }
+
+    // Attack
+    if (clickedUnit && clickedUnit.side !== selUnit.side && state._attackTargets?.has(hexKey)) {
+      attackFromSelection(hexKey);
+      return;
+    }
+
+    // Move
+    if (!clickedUnit && state._moveTargets?.has(hexKey)) {
+      moveSelectedTo(hexKey);
+      return;
+    }
+
+    // Switch selection to another friendly (forfeits any optional post-move attack)
+    if (clickedUnit && clickedUnit.side === state.side) {
+      clearSelection();
+      const reason = activationBlockReason(clickedUnit, hexKey);
+      if (reason) {
+        log(reason);
+        updateHud();
+        return;
+      }
+      if (unitCanActivate(clickedUnit, hexKey)) selectUnit(hexKey);
+      return;
+    }
+  }
+
+  // --- Events
+  elCanvas.addEventListener('mousemove', (e) => {
+    const rect = elCanvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const h = pickHex(x, y);
+    state._hoverKey = h ? h.k : null;
+    draw();
+  });
+
+  elCanvas.addEventListener('mouseleave', () => {
+    state._hoverKey = null;
+    draw();
+  });
+
+  elCanvas.addEventListener('click', (e) => {
+    const rect = elCanvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const h = pickHex(x, y);
+    if (!h) return;
+
+    if (state.mode === 'edit') {
+      if (state.tool === 'terrain') paintTerrain(h.k);
+      else placeOrReplaceUnit(h.k);
+    } else {
+      clickPlay(h.k);
+    }
+  });
+
+  // Keyboard: P = pass with selected unit
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'p' || e.key === 'P') {
+      if (state.mode === 'play' && state.selectedKey) {
+        e.preventDefault();
+        passSelected();
+      }
+    }
+
+    // Toggle command radius overlay
+    if (e.key === 'c' || e.key === 'C') {
+      if (state.mode === 'play') {
+        state.showCommand = !state.showCommand;
+        log(`Command radius: ${state.showCommand ? 'ON' : 'OFF'}.`);
+        updateHud();
+      }
+    }
+    // Toggle terrain palette (visual only)
+    if (e.key === 't' || e.key === 'T') {
+      const cur = state.terrainTheme || 'vivid';
+      const i = TERRAIN_THEME_ORDER.indexOf(cur);
+      state.terrainTheme = TERRAIN_THEME_ORDER[(i + 1) % TERRAIN_THEME_ORDER.length];
+      log(`Terrain palette: ${state.terrainTheme.toUpperCase()}.`);
+      updateHud();
+    }
+  });
+
+  window.addEventListener('resize', resize);
+
+  elModeBtn.addEventListener('click', () => {
+    if (state.mode === 'edit') enterPlay();
+    else enterEdit();
+  });
+
+  elToolUnits.addEventListener('click', () => { state.tool = 'units'; updateHud(); });
+  elToolTerrain.addEventListener('click', () => { state.tool = 'terrain'; updateHud(); });
+
+  elSideBlue.addEventListener('click', () => { state.editSide = 'blue'; updateHud(); });
+  elSideRed.addEventListener('click', () => { state.editSide = 'red'; updateHud(); });
+
+  elTypeBtns.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-type]');
+    if (!btn) return;
+    state.editType = btn.dataset.type;
+    state.editErase = false;
+    if (state.editType === 'gen') state.editQuality = 'green';
+    updateHud();
+  });
+
+  elEraseBtn.addEventListener('click', () => { state.editErase = !state.editErase; updateHud(); });
+
+  elQualityGreen.addEventListener('click', () => { state.editQuality = 'green'; updateHud(); });
+  elQualityRegular.addEventListener('click', () => { state.editQuality = 'regular'; updateHud(); });
+  elQualityVeteran.addEventListener('click', () => { state.editQuality = 'veteran'; updateHud(); });
+
+  elTerrainBtns.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-terrain]');
+    if (!btn) return;
+    state.editTerrain = btn.dataset.terrain;
+    updateHud();
+  });
+
+  elVictorySel.addEventListener('change', () => {
+    state.victoryMode = elVictorySel.value;
+    updateHud();
+  });
+
+  elEndTurnBtn.addEventListener('click', endTurn);
+
+  elClearUnitsBtn.addEventListener('click', () => { enterEdit(); clearUnits(); });
+
+  elLoadScenarioBtn.addEventListener('click', () => { loadScenario(elScenarioSel.value); });
+
+  // --- Populate scenario & victory dropdowns
+  function populateScenarioSelect() {
+    elScenarioSel.innerHTML = '';
+    for (const name of Object.keys(SCENARIOS)) {
+      const opt = document.createElement('option');
+      opt.value = name;
+      opt.textContent = name;
+      elScenarioSel.appendChild(opt);
+    }
+    elScenarioSel.value = 'Empty (Island)';
+  }
+
+  function populateVictorySelect() {
+    elVictorySel.innerHTML = '';
+    const modes = [
+      { id: 'clear', label: 'Clear Victory (halve UP)' },
+      { id: 'decapitation', label: 'Decapitation (kill all generals)' },
+      { id: 'annihilation', label: 'Annihilation (kill all units)' },
+    ];
+    for (const m of modes) {
+      const opt = document.createElement('option');
+      opt.value = m.id;
+      opt.textContent = m.label;
+      elVictorySel.appendChild(opt);
+    }
+    elVictorySel.value = 'clear';
+    state.victoryMode = 'clear';
+  }
+
+  function boot() {
+    populateScenarioSelect();
+    populateVictorySelect();
+
+    loadScenario('Empty (Island)');
+    enterEdit();
+
+    log(`Booted ${GAME_NAME}. Active hexes=${board.active.length}. Edit: place units. Then To Play.`);
+    updateHud();
+    resize();
+  }
+
+  boot();
+})();
