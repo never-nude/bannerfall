@@ -3647,8 +3647,16 @@ function unitColors(side) {
     const nextMode = (mode === 'expanded') ? 'expanded' : 'quick';
     const quick = nextMode === 'quick';
 
-    if (elRulesQuickView) elRulesQuickView.hidden = !quick;
-    if (elRulesExpandedView) elRulesExpandedView.hidden = quick;
+    if (elRulesQuickView) {
+      elRulesQuickView.hidden = !quick;
+      elRulesQuickView.style.display = quick ? 'grid' : 'none';
+      elRulesQuickView.setAttribute('aria-hidden', quick ? 'false' : 'true');
+    }
+    if (elRulesExpandedView) {
+      elRulesExpandedView.hidden = quick;
+      elRulesExpandedView.style.display = quick ? 'none' : 'grid';
+      elRulesExpandedView.setAttribute('aria-hidden', quick ? 'true' : 'false');
+    }
 
     if (elRulesViewQuickBtn) {
       elRulesViewQuickBtn.classList.toggle('active', quick);
