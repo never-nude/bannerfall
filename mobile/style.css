@@ -9,6 +9,7 @@
   --focus:#79a7ff;
   --accent:#d8bd7e;
   --combat-h:198px;
+  --hud-h:86px;
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-right: env(safe-area-inset-right, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
@@ -44,8 +45,8 @@ body{
 #layout{
   display:grid;
   grid-template-columns: 1fr 360px;
-  height: calc(100% - 86px - var(--combat-h));
-  height: calc(100dvh - 86px - var(--combat-h));
+  height: calc(100% - var(--hud-h) - var(--combat-h));
+  height: calc(100dvh - var(--hud-h) - var(--combat-h));
 }
 
 #canvasWrap{position:relative;}
@@ -165,6 +166,24 @@ body{
   font-size:12px;
   line-height:1.35;
   margin-top:8px;
+}
+
+#statusPanel{display:none;}
+
+.statusMeta{
+  color:var(--muted);
+  font-size:12px;
+  line-height:1.4;
+  white-space:pre-line;
+  word-break:break-word;
+}
+
+.statusLast{
+  margin-top:8px;
+  padding-top:8px;
+  border-top:1px dashed rgba(255,255,255,0.08);
+  font-size:12px;
+  line-height:1.35;
 }
 
 .draftStatus{
@@ -497,6 +516,20 @@ body{
   .combatColDice .physicalDie{
     width:48px;
     height:48px;
+  }
+}
+
+@media (hover: none) and (pointer: coarse){
+  :root{ --hud-h:56px; }
+  #hud{
+    padding:12px 16px 10px;
+  }
+  #hudMeta,
+  #hudLast{
+    display:none;
+  }
+  #statusPanel{
+    display:block;
   }
 }
 

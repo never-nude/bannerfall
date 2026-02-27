@@ -341,6 +341,8 @@
   const elHudTitle = document.getElementById('hudTitle');
   const elHudMeta = document.getElementById('hudMeta');
   const elHudLast = document.getElementById('hudLast');
+  const elStatusMeta = document.getElementById('statusMeta');
+  const elStatusLast = document.getElementById('statusLast');
 
   const elModeBtn = document.getElementById('modeBtn');
   const elGameModeSel = document.getElementById('gameModeSel');
@@ -3688,6 +3690,7 @@ function unitColors(side) {
   function log(msg) {
     state.last = msg;
     elHudLast.textContent = msg;
+    if (elStatusLast) elStatusLast.textContent = msg;
 
     state.events.push({ t: Date.now(), msg });
     if (state.events.length > 50) state.events.shift();
@@ -4387,7 +4390,14 @@ function unitColors(side) {
       }
     }
     meta.push(`Build ${BUILD_ID}`);
-    elHudMeta.textContent = meta.join('  ·  ');
+    const joinedMeta = meta.join('  ·  ');
+    elHudMeta.textContent = joinedMeta;
+    if (elStatusMeta) {
+      elStatusMeta.textContent = meta.join('\n');
+    }
+    if (elStatusLast) {
+      elStatusLast.textContent = state.last || '-';
+    }
 
     elModeBtn.textContent = state.mode === 'edit' ? 'Start Battle' : 'Back to Setup';
     if (elGameModeSel) {

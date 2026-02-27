@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <title>Bannerfall</title>
-  <link rel="stylesheet" href="style.css?v=20260227-mobile-web-v1" />
+  <link rel="stylesheet" href="style.css?v=20260227-mobile-hud-v2" />
 </head>
 <body>
   <header id="hud">
@@ -63,6 +63,12 @@
         <div class="row">
           <button id="lineAdvanceBtn" class="btn wide">Line Advance</button>
         </div>
+      </div>
+
+      <div id="statusPanel" class="panel">
+        <div class="panelTitle">Battle Status</div>
+        <div id="statusMeta" class="statusMeta">Status loading…</div>
+        <div id="statusLast" class="statusLast">Latest action: -</div>
       </div>
 
       <div class="panel">
@@ -264,7 +270,7 @@
   </section>
 
   <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
-  <script src="build.js?v=20260227-mobile-web-v1"></script>
-  <script src="main.js?v=20260227-mobile-web-v1"></script>
+  <script src="build.js?v=20260227-mobile-hud-v2"></script>
+  <script src="main.js?v=20260227-mobile-hud-v2"></script>
 </body>
 </html>
