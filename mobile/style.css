@@ -636,7 +636,40 @@ body.rules-open{
   font-weight:800;
 }
 
+.rulesViewTabs{
+  display:flex;
+  gap:8px;
+  margin-bottom:10px;
+}
+
+.rulesTabBtn{
+  appearance:none;
+  border:1px solid var(--line);
+  background:rgba(255,255,255,0.03);
+  color:var(--muted);
+  border-radius:999px;
+  min-height:34px;
+  padding:6px 12px;
+  font-size:11px;
+  font-weight:700;
+  letter-spacing:0.08em;
+  text-transform:uppercase;
+  cursor:pointer;
+}
+
+.rulesTabBtn.active{
+  color:var(--text);
+  border-color:#4d6da6;
+  box-shadow:0 0 0 1px rgba(121,167,255,0.25) inset;
+}
+
 .rulesCardBody{
+  display:grid;
+  grid-template-columns:repeat(2, minmax(0, 1fr));
+  gap:10px;
+}
+
+.rulesExpanded{
   display:grid;
   grid-template-columns:repeat(2, minmax(0, 1fr));
   gap:10px;
@@ -662,6 +695,22 @@ body.rules-open{
   font-size:13px;
   color:#d8dde8;
   line-height:1.45;
+}
+
+.rulesList{
+  margin:0;
+  padding-left:18px;
+  color:#d8dde8;
+  font-size:13px;
+  line-height:1.45;
+}
+
+.rulesList li{
+  margin:0 0 6px;
+}
+
+.rulesList li:last-child{
+  margin-bottom:0;
 }
 
 @media (max-width: 1200px){
@@ -703,6 +752,9 @@ body.rules-open{
     font-size:10px;
   }
   .rulesCardBody{
+    grid-template-columns:1fr;
+  }
+  .rulesExpanded{
     grid-template-columns:1fr;
   }
   #layout{grid-template-rows:minmax(280px, 52dvh) auto;}

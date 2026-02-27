@@ -373,6 +373,10 @@
   const elRulesQuickBtn = document.getElementById('rulesQuickBtn');
   const elRulesModal = document.getElementById('rulesModal');
   const elRulesCloseBtn = document.getElementById('rulesCloseBtn');
+  const elRulesViewQuickBtn = document.getElementById('rulesViewQuickBtn');
+  const elRulesViewExpandedBtn = document.getElementById('rulesViewExpandedBtn');
+  const elRulesQuickView = document.getElementById('rulesQuickView');
+  const elRulesExpandedView = document.getElementById('rulesExpandedView');
   const elStatusMeta = document.getElementById('statusMeta');
   const elStatusLast = document.getElementById('statusLast');
 
@@ -433,6 +437,7 @@
   const elCombatHint = document.getElementById('combatHint');
   const COMBAT_RULE_HINT = 'Rules: 5-6 hit, 4 retreat, 1-3 miss. Defender in Woods gives attacker -1 die (minimum 1).';
   let diceRenderNonce = 0;
+  const RULES_VIEW_PREF_KEY = 'bannerfall-rules-view-v1';
   const PANEL_COLLAPSE_PREF_KEY = 'bannerfall-panel-collapse-v1';
   const PANEL_COLLAPSE_DEFAULTS_TOUCH = {
     turnOrdersPanel: false,
@@ -3622,6 +3627,39 @@ function unitColors(side) {
   function setInspectorValue(el, value) {
     if (!el) return;
     el.textContent = String(value);
+  }
+
+  function loadRulesViewMode() {
+    try {
+      const raw = localStorage.getItem(RULES_VIEW_PREF_KEY);
+      if (raw === 'expanded') return 'expanded';
+    } catch (_) {}
+    return 'quick';
+  }
+
+  function saveRulesViewMode(mode) {
+    try {
+      localStorage.setItem(RULES_VIEW_PREF_KEY, mode === 'expanded' ? 'expanded' : 'quick');
+    } catch (_) {}
+  }
+
+  function setRulesViewMode(mode, savePref = true) {
+    const nextMode = (mode === 'expanded') ? 'expanded' : 'quick';
+    const quick = nextMode === 'quick';
+
+    if (elRulesQuickView) elRulesQuickView.hidden = !quick;
+    if (elRulesExpandedView) elRulesExpandedView.hidden = quick;
+
+    if (elRulesViewQuickBtn) {
+      elRulesViewQuickBtn.classList.toggle('active', quick);
+      elRulesViewQuickBtn.setAttribute('aria-selected', quick ? 'true' : 'false');
+    }
+    if (elRulesViewExpandedBtn) {
+      elRulesViewExpandedBtn.classList.toggle('active', !quick);
+      elRulesViewExpandedBtn.setAttribute('aria-selected', quick ? 'false' : 'true');
+    }
+
+    if (savePref) saveRulesViewMode(nextMode);
   }
 
   function isRulesModalOpen() {
@@ -7771,6 +7809,8 @@ function unitColors(side) {
     window.visualViewport.addEventListener('resize', resize);
   }
 
+  setRulesViewMode(loadRulesViewMode(), false);
+
   if (elRulesQuickBtn) {
     elRulesQuickBtn.addEventListener('click', () => {
       setRulesModalOpen(true);
@@ -7788,6 +7828,16 @@ function unitColors(side) {
         e.preventDefault();
         setRulesModalOpen(false);
       }
+    });
+  }
+  if (elRulesViewQuickBtn) {
+    elRulesViewQuickBtn.addEventListener('click', () => {
+      setRulesViewMode('quick');
+    });
+  }
+  if (elRulesViewExpandedBtn) {
+    elRulesViewExpandedBtn.addEventListener('click', () => {
+      setRulesViewMode('expanded');
     });
   }
 

@@ -294,7 +294,12 @@
         <div id="rulesModalTitle" class="rulesCardTitle">Bannerfall Rules</div>
         <button id="rulesCloseBtn" class="btn" type="button">Close</button>
       </div>
-      <div class="rulesCardBody">
+      <div class="rulesViewTabs" role="tablist" aria-label="Rules layout">
+        <button id="rulesViewQuickBtn" class="rulesTabBtn active" type="button" role="tab" aria-selected="true">Quick</button>
+        <button id="rulesViewExpandedBtn" class="rulesTabBtn" type="button" role="tab" aria-selected="false">Expanded</button>
+      </div>
+
+      <div id="rulesQuickView" class="rulesCardBody">
         <div class="rulesBlock">
           <div class="rulesBlockTitle">Turn Flow</div>
           <div class="rulesText">3 actions per turn. Most units act once. Turn auto-ends after the third action.</div>
@@ -312,11 +317,69 @@
           <div class="rulesText">Line Advance moves a contiguous infantry line forward. Medics heal adjacent friendlies and do not attack.</div>
         </div>
       </div>
+
+      <div id="rulesExpandedView" class="rulesExpanded" hidden>
+        <div class="rulesBlock">
+          <div class="rulesBlockTitle">Turn Structure</div>
+          <ul class="rulesList">
+            <li>Each side gets 3 actions per turn.</li>
+            <li>A unit normally activates once per turn.</li>
+            <li>Turn advances automatically after action 3 resolves.</li>
+            <li>Victory checks continue as units are removed/captured.</li>
+          </ul>
+        </div>
+        <div class="rulesBlock">
+          <div class="rulesBlockTitle">Command and Control</div>
+          <ul class="rulesList">
+            <li>General command radius scales by quality.</li>
+            <li>Runner relays command to adjacent units (range 1).</li>
+            <li>Green units out of command have tighter activation limits.</li>
+            <li>Skirmishers, Runners, and Veterans can disengage more safely.</li>
+          </ul>
+        </div>
+        <div class="rulesBlock">
+          <div class="rulesBlockTitle">Movement and Positioning</div>
+          <ul class="rulesList">
+            <li>Move allowance depends on unit type and quality.</li>
+            <li>Engagement limits movement options until disengaged.</li>
+            <li>Terrain changes approach lanes and local maneuver quality.</li>
+            <li>Line Advance pushes a contiguous infantry formation forward.</li>
+          </ul>
+        </div>
+        <div class="rulesBlock">
+          <div class="rulesBlockTitle">Combat Resolution</div>
+          <ul class="rulesList">
+            <li>Dice: 5-6 hit, 4 retreat, 1-3 miss.</li>
+            <li>Woods defense gives attacker -1 die (minimum 1).</li>
+            <li>Blocked retreat converts to extra damage.</li>
+            <li>Cavalry angle attacks can gain flank/rear bonuses.</li>
+          </ul>
+        </div>
+        <div class="rulesBlock">
+          <div class="rulesBlockTitle">Unit Roles</div>
+          <ul class="rulesList">
+            <li>Infantry holds center and supports line advance.</li>
+            <li>Cavalry threatens flank/rear and exploits openings.</li>
+            <li>Skirmishers screen and reposition flexibly.</li>
+            <li>Archers pressure at range before melee closes.</li>
+            <li>Medics heal adjacent allies and do not attack.</li>
+          </ul>
+        </div>
+        <div class="rulesBlock">
+          <div class="rulesBlockTitle">Useful Controls</div>
+          <ul class="rulesList">
+            <li>Tap unit to show legal moves/attacks.</li>
+            <li><b>P</b> passes selected unit action.</li>
+            <li><b>L</b> triggers line advance when legal.</li>
+            <li><b>C</b> toggles command overlay.</li>
+          </ul>
+        </div>
+      </div>
     </section>
   </div>
 
   <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
-  <script src="build.js?v=20260227-rules-modal-fix-v20"></script>
-  <script src="main.js?v=20260227-rules-modal-fix-v20"></script>
+  <script src="build.js?v=20260227-rules-expanded-v21"></script>
+  <script src="main.js?v=20260227-rules-expanded-v21"></script>
 </body>
 </html>
