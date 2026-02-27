@@ -370,6 +370,9 @@
   const elHudTitle = document.getElementById('hudTitle');
   const elHudMeta = document.getElementById('hudMeta');
   const elHudLast = document.getElementById('hudLast');
+  const elRulesQuickBtn = document.getElementById('rulesQuickBtn');
+  const elRulesModal = document.getElementById('rulesModal');
+  const elRulesCloseBtn = document.getElementById('rulesCloseBtn');
   const elStatusMeta = document.getElementById('statusMeta');
   const elStatusLast = document.getElementById('statusLast');
 
@@ -3619,6 +3622,19 @@ function unitColors(side) {
   function setInspectorValue(el, value) {
     if (!el) return;
     el.textContent = String(value);
+  }
+
+  function isRulesModalOpen() {
+    return !!(elRulesModal && !elRulesModal.hidden);
+  }
+
+  function setRulesModalOpen(open) {
+    if (!elRulesModal) return;
+    const isOpen = !!open;
+    elRulesModal.hidden = !isOpen;
+    elRulesModal.setAttribute('aria-hidden', isOpen ? 'false' : 'true');
+    document.body.classList.toggle('rules-open', isOpen);
+    if (elRulesQuickBtn) elRulesQuickBtn.setAttribute('aria-expanded', String(isOpen));
   }
 
   function loadPanelCollapsePrefs() {
@@ -7708,6 +7724,13 @@ function unitColors(side) {
 
   // Keyboard: P = pass, L = line advance (with selected INF)
   window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && isRulesModalOpen()) {
+      e.preventDefault();
+      setRulesModalOpen(false);
+      return;
+    }
+    if (isRulesModalOpen()) return;
+
     if (e.key === 'p' || e.key === 'P') {
       if (state.mode === 'play' && state.selectedKey && !isAiTurnActive()) {
         e.preventDefault();
@@ -7746,6 +7769,26 @@ function unitColors(side) {
   window.addEventListener('orientationchange', resize);
   if (window.visualViewport) {
     window.visualViewport.addEventListener('resize', resize);
+  }
+
+  if (elRulesQuickBtn) {
+    elRulesQuickBtn.addEventListener('click', () => {
+      setRulesModalOpen(true);
+    });
+  }
+  if (elRulesCloseBtn) {
+    elRulesCloseBtn.addEventListener('click', () => {
+      setRulesModalOpen(false);
+    });
+  }
+  if (elRulesModal) {
+    elRulesModal.addEventListener('click', (e) => {
+      const closeTarget = e.target && e.target.closest ? e.target.closest('[data-rules-close]') : null;
+      if (closeTarget) {
+        e.preventDefault();
+        setRulesModalOpen(false);
+      }
+    });
   }
 
   elModeBtn.addEventListener('click', () => {
