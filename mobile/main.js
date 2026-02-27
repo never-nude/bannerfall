@@ -3011,14 +3011,17 @@
     const rows = (board.maxR - board.minR + 1);
     const availW = rect.width;
     const availH = rect.height;
+    const smallViewport = window.matchMedia('(max-width: 980px)').matches;
+    const boardPad = smallViewport ? 10 : 12;
+    const fitW = Math.max(1, availW - (boardPad * 2));
+    const fitH = Math.max(1, availH - (boardPad * 2));
 
     // For pointy-top hexes with odd-r offset:
     // width ≈ sqrt(3)*R*(cols + 0.5)
     // height ≈ R*((rows-1)*1.5 + 2)
-    const rByW = availW / (Math.sqrt(3) * (cols + 0.5));
-    const rByH = availH / (((rows - 1) * 1.5) + 2);
-    const smallViewport = window.matchMedia('(max-width: 980px)').matches;
-    const minRadius = smallViewport ? 8 : 18;
+    const rByW = fitW / (Math.sqrt(3) * (cols + 0.5));
+    const rByH = fitH / (((rows - 1) * 1.5) + 2);
+    const minRadius = smallViewport ? 6 : 18;
     const maxRadius = smallViewport ? 34 : 42;
     R = Math.max(minRadius, Math.min(maxRadius, Math.floor(Math.min(rByW, rByH))));
 
@@ -3029,8 +3032,8 @@
     const boardW = HEX_W * (cols + 0.5);
     const boardH = R * (((rows - 1) * 1.5) + 2);
 
-    ORIGIN_X = (availW - boardW) / 2 + HEX_W / 2;
-    ORIGIN_Y = (availH - boardH) / 2 + R;
+    ORIGIN_X = boardPad + ((fitW - boardW) / 2) + HEX_W / 2;
+    ORIGIN_Y = boardPad + ((fitH - boardH) / 2) + R;
 
     for (const h of board.active) {
       const x = ORIGIN_X + (h.q - board.minQ) * HEX_W + ((h.r & 1) ? (HEX_W / 2) : 0);
