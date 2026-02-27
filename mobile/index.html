@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <title>Bannerfall</title>
+  <link rel="stylesheet" href="style.css?v=20260227-mobile-web-v1" />
+</head>
+<body>
+  <header id="hud">
+    <div id="hudTitle">Bannerfall</div>
+    <div id="hudMeta">…</div>
+    <div id="hudLast">…</div>
+  </header>
+
+  <main id="layout">
+    <section id="canvasWrap">
+      <canvas id="c"></canvas>
+    </section>
+
+    <aside id="side">
+      <div class="panel">
+        <div class="panelTitle">Turn & Orders</div>
+        <div class="row">
+          <div class="label">Mode</div>
+          <button id="modeBtn" class="btn">To Play</button>
+        </div>
+
+        <div class="row">
+          <div class="label">Game</div>
+          <select id="gameModeSel" class="select">
+            <option value="hvh">Human vs Human</option>
+            <option value="hvai">Human vs AI</option>
+            <option value="online">Online (Host/Guest)</option>
+          </select>
+        </div>
+
+        <div class="row">
+          <div class="label">Advance</div>
+          <select id="forwardAxisSel" class="select">
+            <option value="vertical">Vertical (Blue down)</option>
+            <option value="horizontal">Horizontal (Blue right)</option>
+            <option value="diag_tl_br">Diagonal TL→BR (Blue down-right)</option>
+            <option value="diag_tr_bl">Diagonal TR→BL (Blue down-left)</option>
+          </select>
+        </div>
+
+        <div class="row">
+          <div class="label">Tool</div>
+          <button id="toolUnits" class="btn">Units</button>
+          <button id="toolTerrain" class="btn">Terrain</button>
+        </div>
+
+        <div class="row">
+          <div class="label">Victory</div>
+          <select id="victorySel" class="select"></select>
+        </div>
+
+        <div class="row">
+          <button id="endTurnBtn" class="btn wide">End Turn</button>
+        </div>
+        <div class="row">
+          <button id="lineAdvanceBtn" class="btn wide">Line Advance</button>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panelTitle">Online Multiplayer</div>
+        <div class="row">
+          <div class="label">Online</div>
+          <button id="onlineHostBtn" class="btn wide">Create Room</button>
+          <button id="onlineLeaveBtn" class="btn">Leave</button>
+        </div>
+        <div class="row">
+          <div class="label">Room</div>
+          <div id="onlineMyCode" class="monoVal roomCode empty">----</div>
+        </div>
+        <div class="row">
+          <div class="label">Join</div>
+          <input id="onlineJoinCode" class="select" type="text" maxlength="4" autocomplete="off" spellcheck="false" placeholder="Enter code" />
+          <button id="onlineJoinBtn" class="btn">Connect</button>
+        </div>
+        <div class="note">Host creates room and shares 4-character code. Guest enters code and connects.</div>
+        <div id="onlineRoleHint" class="note">Switch Game mode to Online, then create or join.</div>
+        <div id="onlineStatus" class="note">Online: idle.</div>
+      </div>
+
+      <div class="panel">
+        <div class="panelTitle">Battle Setup</div>
+        <div class="row">
+          <div class="label">Scenario</div>
+          <select id="scenarioSel" class="select"></select>
+        </div>
+        <details class="details">
+          <summary>Advanced scenario filters</summary>
+          <div class="row">
+            <div class="label">Group</div>
+            <select id="scenarioGroupSel" class="select"></select>
+          </div>
+          <div class="row">
+            <div class="label">Lesson</div>
+            <select id="scenarioLessonSel" class="select"></select>
+          </div>
+          <div class="row">
+            <div class="label">Size</div>
+            <select id="scenarioSizeSel" class="select"></select>
+          </div>
+          <div class="row">
+            <div class="label">Map</div>
+            <select id="scenarioTerrainSel" class="select"></select>
+          </div>
+        </details>
+        <div class="row">
+          <button id="loadScenarioBtn" class="btn wide">Load Scenario</button>
+          <button id="clearUnitsBtn" class="btn wide">Clear Units</button>
+        </div>
+        <details class="details" open>
+          <summary>Multiplayer: Custom Army Draft (2 Players)</summary>
+          <div class="row">
+            <div class="label">Draft</div>
+            <select id="draftModeSel" class="select">
+              <option value="off">Off</option>
+              <option value="visible">Visible Placement</option>
+              <option value="fog">Hidden Placement (Reveal)</option>
+            </select>
+          </div>
+          <div class="row">
+            <div class="label">UP Budget</div>
+            <input id="draftBudgetInput" class="input" type="number" min="20" max="300" step="5" value="120" />
+          </div>
+          <div class="row">
+            <button id="startDraftBtn" class="btn wide">Start Draft Setup</button>
+            <button id="draftDoneBtn" class="btn wide">Done For Side</button>
+          </div>
+          <div id="draftStatus" class="draftStatus">Draft inactive. Local hotseat multiplayer.</div>
+        </details>
+        <div class="row">
+          <button id="exportStateBtn" class="btn wide">Save Battle</button>
+          <button id="importStateBtn" class="btn wide">Load Save</button>
+          <input id="stateFileInput" type="file" accept=".json,application/json" hidden />
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panelTitle">Dice</div>
+        <div class="row">
+          <div class="label">Last Roll</div>
+          <div id="diceSummary" class="diceSummary">No rolls yet.</div>
+        </div>
+        <div id="diceTray" class="diceTray"></div>
+      </div>
+
+      <div class="panel">
+        <div class="panelTitle">Selected Unit</div>
+        <div class="row">
+          <div class="label">Unit</div>
+          <div id="inspectorTitle" class="inspectorTitle">No unit selected.</div>
+        </div>
+        <div id="inspectorMeta" class="inspectorMeta">Select a friendly unit in Play mode.</div>
+        <div class="inspectorGrid">
+          <div class="inspectorKey">Side</div><div id="inspectorSide" class="inspectorVal">-</div>
+          <div class="inspectorKey">Type</div><div id="inspectorType" class="inspectorVal">-</div>
+          <div class="inspectorKey">Quality</div><div id="inspectorQuality" class="inspectorVal">-</div>
+          <div class="inspectorKey">Hex</div><div id="inspectorHex" class="inspectorVal">-</div>
+          <div class="inspectorKey">HP</div><div id="inspectorHp" class="inspectorVal">-</div>
+          <div class="inspectorKey">UP</div><div id="inspectorUp" class="inspectorVal">-</div>
+          <div class="inspectorKey">Command</div><div id="inspectorCommand" class="inspectorVal">-</div>
+          <div class="inspectorKey">Cmd Radius</div><div id="inspectorRadius" class="inspectorVal">-</div>
+        </div>
+      </div>
+
+      <div class="panel editorOnly">
+        <div class="panelTitle">Editor Tools</div>
+        <div class="row">
+          <div class="label">Side</div>
+          <button id="sideBlue" class="btn">Blue</button>
+          <button id="sideRed" class="btn">Red</button>
+        </div>
+
+        <div class="row">
+          <div class="label">Type</div>
+          <div id="typeBtns" class="btnGrid">
+            <button class="btn" data-type="inf">Infantry</button>
+            <button class="btn" data-type="cav">Cavalry</button>
+            <button class="btn" data-type="skr">Skirmisher</button>
+            <button class="btn" data-type="arc">Archer</button>
+            <button class="btn" data-type="gen">General</button>
+            <button class="btn" data-type="run">Runner</button>
+            <button class="btn" data-type="iat">Medic</button>
+          </div>
+        </div>
+
+        <div class="row">
+          <button id="eraseBtn" class="btn wide">Erase</button>
+        </div>
+
+        <div class="row">
+          <div class="label">Quality</div>
+          <button id="qGreen" class="btn">Green</button>
+          <button id="qRegular" class="btn">Regular</button>
+          <button id="qVeteran" class="btn">Veteran</button>
+        </div>
+
+        <div class="row">
+          <div class="label">Terrain</div>
+          <div id="terrainBtns" class="btnGrid">
+            <button class="btn" data-terrain="clear">Clear</button>
+            <button class="btn" data-terrain="hills">Hills</button>
+            <button class="btn" data-terrain="woods">Woods</button>
+            <button class="btn" data-terrain="rough">Rough</button>
+            <button class="btn" data-terrain="water">Water</button>
+          </div>
+        </div>
+
+        <details class="details">
+          <summary>Player quick rules</summary>
+          <div class="note">
+            In <b>Edit</b>, click to place units/terrain. In <b>Play</b>, click a friendly unit to see legal moves (blue) and attacks (red).<br><br>
+            Activations: <b>3</b> per turn, and each unit usually acts once.<br>
+            Command: units need a friendly <b>General</b> (range 3/4/5 by quality) or <b>Runner</b> relay (range 1).<br>
+            Engaged units cannot move, except <b>Skirmishers</b>, <b>Runners</b>, and <b>Veterans</b> may disengage safely by 1 hex.<br>
+            <b>Medic</b>: move 1, no attack, 1 HP (always Regular). Heal one adjacent friendly unit for +1 HP as its action.<br>
+            <b>Line Advance</b>: select Infantry and press <b>Line Advance</b> (or <b>L</b>) to push a contiguous line one step forward.<br>
+            Dice: <b>5–6 hit</b>, <b>4 retreat</b>, <b>1–3 miss</b>.<br>
+            Hotkeys: <b>P</b> pass, <b>C</b> command overlay.
+          </div>
+        </details>
+        <details class="details">
+          <summary>Advanced rules and UI notes</summary>
+          <div class="note">
+            Runner has 2 HP, no attack, and relays command. Move: Green 3, Regular 4, Veteran 5. UP: 1/2/3.<br>
+            Medic costs 4 UP and is best used near your infantry center or key cavalry screen.<br>
+            Infantry in command (or veteran) auto-pivots against flank/rear melee before impact.<br>
+            Veteran cavalry may disengage after melee if movement remains and destination is safe.<br>
+            Blocked retreat converts to 1 hit. Terrain can reduce attack dice.
+          </div>
+        </details>
+      </div>
+    </aside>
+  </main>
+
+  <section id="combatRail" aria-live="polite">
+    <div class="combatCol combatColBreakdown">
+      <div class="combatColTitle">Combat Breakdown</div>
+      <div id="combatSummary" class="combatSummary">No combat yet. Select a unit and attack to see exact dice math.</div>
+      <div id="combatMath" class="combatMeta">Dice math: -</div>
+      <div id="combatHint" class="combatHint">Rules: 5-6 hit, 4 retreat, 1-3 miss. Defender in Woods gives attacker -1 die (minimum 1).</div>
+    </div>
+    <div class="combatCol combatColDice">
+      <div class="combatColTitle">Dice</div>
+      <div id="physicalDiceRow" class="physicalDiceRow">
+        <span class="physicalDiceEmpty">No dice yet.</span>
+      </div>
+    </div>
+    <div class="combatCol">
+      <div class="combatColTitle">Terrain Modifier</div>
+      <div id="combatTerrain" class="combatMeta">Terrain modifier: -</div>
+    </div>
+    <div class="combatCol">
+      <div class="combatColTitle">Outcome</div>
+      <div id="combatOutcome" class="combatMeta">Outcome: -</div>
+    </div>
+  </section>
+
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+  <script src="build.js?v=20260227-mobile-web-v1"></script>
+  <script src="main.js?v=20260227-mobile-web-v1"></script>
+</body>
+</html>
