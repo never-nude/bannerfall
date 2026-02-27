@@ -1,1 +1,1 @@
-window.POLEMO_BUILD_ID = '20260227-193400-guidebook-toggle-hardfix-v24';
+window.POLEMO_BUILD_ID = '20260227-195000-guidebook-copy-v25';

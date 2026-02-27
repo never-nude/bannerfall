@@ -711,6 +711,10 @@ body.rules-open{
   line-height:1.45;
 }
 
+.rulesBlock .rulesText + .rulesText{
+  margin-top:10px;
+}
+
 .rulesList{
   margin:0;
   padding-left:18px;
