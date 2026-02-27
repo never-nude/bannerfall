@@ -7374,6 +7374,7 @@ function unitColors(side) {
     }
 
     loadScenario(RANDOM_START_SCENARIO_NAME);
+    enterPlay();
 
     const biasLabel = (randomScenario.advantageSide === 'none')
       ? 'balanced'
@@ -7382,7 +7383,8 @@ function unitColors(side) {
     log(
       `Booted ${GAME_NAME}. Randomized startup loaded ` +
       `(units=${randomScenario.units.length}, terrain=${randomScenario.terrain.length}, ` +
-      `axis=${forwardAxisLabel(randomScenario.axis)}, ${biasLabel}).`
+      `axis=${forwardAxisLabel(randomScenario.axis)}, ${biasLabel}). ` +
+      `Started in Play mode.`
     );
     updateHud();
     resize();
