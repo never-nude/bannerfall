@@ -6937,6 +6937,15 @@ function unitColors(side) {
     state._attackTargets = computeAttackTargets(destKey, u);
     state._healTargets = computeHealTargets(destKey, u);
 
+    const hasFollowUpAttack = !!(state._attackTargets && state._attackTargets.size > 0);
+    const hasFollowUpHeal = !!(state._healTargets && state._healTargets.size > 0);
+    if (!hasFollowUpAttack && !hasFollowUpHeal) {
+      clearSelection();
+      updateHud();
+      maybeAutoEndTurnAtActionLimit();
+      return;
+    }
+
     updateHud();
   }
 
@@ -7064,6 +7073,7 @@ function unitColors(side) {
         if (reason) {
           log(reason);
           updateHud();
+          maybeAutoEndTurnAtActionLimit();
           return;
         }
         if (unitCanActivate(clickedUnit, hexKey)) selectUnit(hexKey);

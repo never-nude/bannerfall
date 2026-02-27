@@ -1,1 +1,1 @@
-window.POLEMO_BUILD_ID = '20260227-133100-ai-visibility-v11';
+window.POLEMO_BUILD_ID = '20260227-141500-auto-end-v12';
