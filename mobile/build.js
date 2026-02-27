@@ -1,1 +1,1 @@
-window.POLEMO_BUILD_ID = '20260227-113800-move-outline-v4';
+window.POLEMO_BUILD_ID = '20260227-114900-autoplay-ai-v5';

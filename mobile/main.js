@@ -421,7 +421,7 @@
     editTerrain: 'clear',
 
     // Play
-    gameMode: 'hvh', // 'hvh' | 'hvai' | 'online'
+    gameMode: 'hvai', // 'hvh' | 'hvai' | 'online'
     forwardAxis: 'vertical', // 'vertical' | 'horizontal' | 'diag_tl_br' | 'diag_tr_bl'
     turn: 1,
     side: 'blue',
@@ -5210,6 +5210,7 @@ function unitColors(side) {
 
     log(`Line Advance: ${moves.length}/${formation.length} INF advanced.${blockText}`);
     updateHud();
+    maybeAutoEndTurnAtActionLimit();
   }
 
   function veteranCavPostAttackWithdrawTargets(fromKey, u, actCtx) {
@@ -5387,6 +5388,14 @@ function unitColors(side) {
   function consumeActivation(unitId) {
     state.actsUsed = Math.min(ACT_LIMIT, state.actsUsed + 1);
     state.actedUnitIds.add(unitId);
+  }
+
+  function maybeAutoEndTurnAtActionLimit() {
+    if (state.mode !== 'play' || state.gameOver) return;
+    if (state.actsUsed < ACT_LIMIT) return;
+    // Do not auto-end while an activation is still in progress.
+    if (state.selectedKey || state.act) return;
+    endTurn();
   }
 
   function destroyUnit(defenderKey, defenderUnit, attackerSide) {
@@ -6707,6 +6716,7 @@ function unitColors(side) {
       log(`Veteran CAV disengaged to ${destKey}.`);
       clearSelection();
       updateHud();
+      maybeAutoEndTurnAtActionLimit();
       return;
     }
 
@@ -6714,6 +6724,7 @@ function unitColors(side) {
       log(`Medic moved to ${destKey}.`);
       clearSelection();
       updateHud();
+      maybeAutoEndTurnAtActionLimit();
       return;
     }
 
@@ -6763,6 +6774,7 @@ function unitColors(side) {
     log(`Medic restored 1 HP to ${target.side.toUpperCase()} ${tdef ? tdef.abbrev : target.type} (${target.hp}/${maxHp}).`);
     clearSelection();
     updateHud();
+    maybeAutoEndTurnAtActionLimit();
   }
 
   function attackFromSelection(targetKey) {
@@ -6816,6 +6828,7 @@ function unitColors(side) {
     // End activation after attack.
     clearSelection();
     updateHud();
+    maybeAutoEndTurnAtActionLimit();
   }
 
   function passSelected() {
@@ -6836,6 +6849,7 @@ function unitColors(side) {
 
     clearSelection();
     updateHud();
+    maybeAutoEndTurnAtActionLimit();
   }
 
   function clickPlay(hexKey) {
@@ -6860,6 +6874,7 @@ function unitColors(side) {
     if (!selUnit) {
       clearSelection();
       updateHud();
+      maybeAutoEndTurnAtActionLimit();
       return;
     }
 
@@ -6868,6 +6883,7 @@ function unitColors(side) {
       clearSelection();
       log('Deselected.');
       updateHud();
+      maybeAutoEndTurnAtActionLimit();
       return;
     }
 
@@ -6896,9 +6912,11 @@ function unitColors(side) {
       if (reason) {
         log(reason);
         updateHud();
+        maybeAutoEndTurnAtActionLimit();
         return;
       }
       if (unitCanActivate(clickedUnit, hexKey)) selectUnit(hexKey);
+      maybeAutoEndTurnAtActionLimit();
       return;
     }
   }
