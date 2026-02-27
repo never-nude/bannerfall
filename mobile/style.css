@@ -90,6 +90,41 @@ body{
   color:var(--accent);
   font-weight:700;
   margin-bottom:8px;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:8px;
+}
+
+.panelToggleBtn{
+  appearance:none;
+  border:1px solid var(--line);
+  background:rgba(255,255,255,0.02);
+  color:var(--muted);
+  border-radius:999px;
+  padding:2px 8px;
+  font-size:10px;
+  letter-spacing:0.08em;
+  text-transform:uppercase;
+  font-weight:700;
+  cursor:pointer;
+}
+
+.panelToggleBtn:hover{
+  background:rgba(255,255,255,0.06);
+  color:var(--text);
+}
+
+.panel.panel-collapsed{
+  padding-bottom:9px;
+}
+
+.panel.panel-collapsed > :not(.panelTitle){
+  display:none !important;
+}
+
+.panel.panel-collapsed .panelTitle{
+  margin-bottom:0;
 }
 
 .row{display:flex;gap:8px;align-items:center;margin:8px 0;flex-wrap:wrap;}

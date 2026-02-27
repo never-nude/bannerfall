@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="style.css?v=20260227-roman-title-v6" />
+  <link rel="stylesheet" href="style.css?v=20260227-panel-fold-v9" />
 </head>
 <body>
   <header id="hud">
@@ -23,7 +23,7 @@
     </section>
 
     <aside id="side">
-      <div class="panel">
+      <div id="turnOrdersPanel" class="panel">
         <div class="panelTitle">Turn & Orders</div>
         <div class="row">
           <div class="label">Mode</div>
@@ -74,7 +74,7 @@
         <div id="statusLast" class="statusLast">Latest action: -</div>
       </div>
 
-      <div class="panel">
+      <div id="onlinePanel" class="panel">
         <div class="panelTitle">Online Multiplayer</div>
         <div class="row">
           <div class="label">Online</div>
@@ -95,7 +95,7 @@
         <div id="onlineStatus" class="note">Online: idle.</div>
       </div>
 
-      <div class="panel">
+      <div id="setupPanel" class="panel">
         <div class="panelTitle">Battle Setup</div>
         <div class="row">
           <div class="label">Scenario</div>
@@ -151,7 +151,7 @@
         </div>
       </div>
 
-      <div class="panel">
+      <div id="dicePanel" class="panel">
         <div class="panelTitle">Dice</div>
         <div class="row">
           <div class="label">Last Roll</div>
@@ -160,7 +160,7 @@
         <div id="diceTray" class="diceTray"></div>
       </div>
 
-      <div class="panel">
+      <div id="selectedUnitPanel" class="panel">
         <div class="panelTitle">Selected Unit</div>
         <div class="row">
           <div class="label">Unit</div>
@@ -179,7 +179,7 @@
         </div>
       </div>
 
-      <div class="panel editorOnly">
+      <div id="editorPanel" class="panel editorOnly">
         <div class="panelTitle">Editor Tools</div>
         <div class="row">
           <div class="label">Side</div>
@@ -273,7 +273,7 @@
   </section>
 
   <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
-  <script src="build.js?v=20260227-roman-title-v6"></script>
-  <script src="main.js?v=20260227-roman-title-v6"></script>
+  <script src="build.js?v=20260227-panel-fold-v9"></script>
+  <script src="main.js?v=20260227-panel-fold-v9"></script>
 </body>
 </html>

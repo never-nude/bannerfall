@@ -397,6 +397,16 @@
   const elCombatHint = document.getElementById('combatHint');
   const COMBAT_RULE_HINT = 'Rules: 5-6 hit, 4 retreat, 1-3 miss. Defender in Woods gives attacker -1 die (minimum 1).';
   let diceRenderNonce = 0;
+  const PANEL_COLLAPSE_PREF_KEY = 'bannerfall-panel-collapse-v1';
+  const PANEL_COLLAPSE_DEFAULTS_TOUCH = {
+    turnOrdersPanel: false,
+    statusPanel: false,
+    onlinePanel: true,
+    setupPanel: true,
+    dicePanel: true,
+    selectedUnitPanel: true,
+    editorPanel: true,
+  };
 
   const elVictorySel = document.getElementById('victorySel');
   const elEndTurnBtn = document.getElementById('endTurnBtn');
@@ -3416,6 +3426,88 @@ function unitColors(side) {
   function setInspectorValue(el, value) {
     if (!el) return;
     el.textContent = String(value);
+  }
+
+  function loadPanelCollapsePrefs() {
+    try {
+      const raw = localStorage.getItem(PANEL_COLLAPSE_PREF_KEY);
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object') return {};
+      return parsed;
+    } catch (_) {
+      return {};
+    }
+  }
+
+  function savePanelCollapsePrefs(prefs) {
+    try {
+      localStorage.setItem(PANEL_COLLAPSE_PREF_KEY, JSON.stringify(prefs || {}));
+    } catch (_) {}
+  }
+
+  function applyPanelCollapsedState(panel, collapsed) {
+    if (!panel) return;
+    const isCollapsed = !!collapsed;
+    panel.classList.toggle('panel-collapsed', isCollapsed);
+    const btn = panel.querySelector(':scope > .panelTitle > .panelToggleBtn');
+    if (btn) {
+      btn.textContent = isCollapsed ? 'Show' : 'Hide';
+      btn.setAttribute('aria-expanded', String(!isCollapsed));
+      btn.setAttribute('aria-label', `${isCollapsed ? 'Show' : 'Hide'} ${panel.id || 'panel'}`);
+    }
+  }
+
+  function defaultPanelCollapsedOnTouch(panelId) {
+    return !!PANEL_COLLAPSE_DEFAULTS_TOUCH[panelId];
+  }
+
+  function initPanelCollapseControls() {
+    const panels = [...document.querySelectorAll('#side > .panel')];
+    if (!panels.length) return;
+
+    const prefs = loadPanelCollapsePrefs();
+    const coarsePointer = window.matchMedia('(hover: none) and (pointer: coarse)').matches;
+    let prefsChanged = false;
+
+    for (let i = 0; i < panels.length; i++) {
+      const panel = panels[i];
+      const title = panel.querySelector(':scope > .panelTitle');
+      if (!title) continue;
+
+      if (!panel.id) panel.id = `panel${i + 1}`;
+      const panelId = panel.id;
+
+      let toggleBtn = title.querySelector('.panelToggleBtn');
+      if (!toggleBtn) {
+        toggleBtn = document.createElement('button');
+        toggleBtn.type = 'button';
+        toggleBtn.className = 'panelToggleBtn';
+        title.appendChild(toggleBtn);
+      }
+
+      toggleBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const nextCollapsed = !panel.classList.contains('panel-collapsed');
+        applyPanelCollapsedState(panel, nextCollapsed);
+        prefs[panelId] = nextCollapsed;
+        savePanelCollapsePrefs(prefs);
+      });
+
+      let collapsed = false;
+      if (Object.prototype.hasOwnProperty.call(prefs, panelId)) {
+        collapsed = !!prefs[panelId];
+      } else if (coarsePointer) {
+        collapsed = defaultPanelCollapsedOnTouch(panelId);
+        prefs[panelId] = collapsed;
+        prefsChanged = true;
+      }
+
+      applyPanelCollapsedState(panel, collapsed);
+    }
+
+    if (prefsChanged) savePanelCollapsePrefs(prefs);
   }
 
   function resetInspector(message = 'Select a friendly unit in Play mode.') {
@@ -7383,6 +7475,7 @@ function unitColors(side) {
   }
 
   function boot() {
+    initPanelCollapseControls();
     resetDraftState({ keepBudget: false });
     populateScenarioFilters();
     populateVictorySelect();
