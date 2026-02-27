@@ -613,7 +613,7 @@ body{
   }
 }
 
-@media (hover: none) and (pointer: coarse) and (orientation: landscape){
+@media (orientation: landscape) and (max-width: 1400px){
   #cornerDiceHud.has-roll{
     display:flex;
   }

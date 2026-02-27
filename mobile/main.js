@@ -3666,13 +3666,25 @@ function unitColors(side) {
     }
   }
 
+  function renderIdleCornerDice() {
+    if (!elCornerDiceRow) return;
+    elCornerDiceRow.innerHTML = '';
+    const sample = [1, 3, 5];
+    for (const v of sample) {
+      const { shell } = makePhysicalDieShell(v, 'miss', `Sample d6 ${v}`);
+      shell.className = 'physicalDie miss cornerDie';
+      shell.style.setProperty('--dice-rot', `${(v - 2) * 2}deg`);
+      elCornerDiceRow.appendChild(shell);
+    }
+    if (elCornerDiceHud) elCornerDiceHud.classList.add('has-roll');
+  }
+
   function clearDiceDisplay() {
     diceRenderNonce += 1;
     if (elDiceSummary) elDiceSummary.textContent = 'No rolls yet.';
     if (elDiceTray) elDiceTray.innerHTML = '';
     renderIdlePhysicalDice();
-    if (elCornerDiceRow) elCornerDiceRow.innerHTML = '';
-    if (elCornerDiceHud) elCornerDiceHud.classList.remove('has-roll');
+    renderIdleCornerDice();
     clearCombatBreakdown();
   }
 
@@ -3750,8 +3762,7 @@ function unitColors(side) {
     if (elPhysicalDiceRow) elPhysicalDiceRow.innerHTML = '';
     if (elCornerDiceRow) {
       elCornerDiceRow.innerHTML = '';
-      if (rolls.length > 0 && elCornerDiceHud) elCornerDiceHud.classList.add('has-roll');
-      else if (elCornerDiceHud) elCornerDiceHud.classList.remove('has-roll');
+      if (elCornerDiceHud) elCornerDiceHud.classList.add('has-roll');
     }
     for (let i = 0; i < rolls.length; i++) {
       const roll = rolls[i];
