@@ -601,6 +601,11 @@ body.rules-open{
   display:none !important;
 }
 
+#rulesQuickView[hidden],
+#rulesExpandedView[hidden]{
+  display:none !important;
+}
+
 .rulesBackdrop{
   position:absolute;
   inset:0;
