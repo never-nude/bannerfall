@@ -87,15 +87,20 @@
   const AI_DIFFICULTY_IDS = new Set(['easy', 'standard', 'hard']);
   // Different pacing/quality profiles by AI difficulty.
   const AI_TIMING_BY_DIFFICULTY = {
-    easy: { startMs: 620, stepMs: 760 },
-    standard: { startMs: 320, stepMs: 420 },
-    hard: { startMs: 180, stepMs: 250 },
+    easy: { startMs: 900, stepMs: 1280, intentMs: 560, movePauseMs: 680, combatPauseMs: 1600 },
+    standard: { startMs: 680, stepMs: 980, intentMs: 430, movePauseMs: 520, combatPauseMs: 1360 },
+    hard: { startMs: 460, stepMs: 760, intentMs: 320, movePauseMs: 420, combatPauseMs: 1180 },
   };
   const RANDOM_START_SCENARIO_NAME = 'Randomized Opening (Auto)';
   const RANDOM_START_UNITS_PER_SIDE = 30;
   const DRAFT_BUDGET_MIN = 20;
   const DRAFT_BUDGET_MAX = 300;
   const DRAFT_BUDGET_DEFAULT = 120;
+  const DICE_SETTLE_BASE_MS = 340;
+  const DICE_SETTLE_STEP_MS = 210;
+  const DICE_SUMMARY_BASE_MS = 520;
+  const DICE_SUMMARY_STEP_MS = 210;
+  const DICE_POST_HOLD_MS = 420;
 
   // Dice faces: 5–6 = Hit, 4 = Retreat.
   const DIE_HIT = new Set([5, 6]);
@@ -486,6 +491,8 @@
     lastImport: null, // { source, at }
     aiBusy: false,
     aiTimer: null,
+    combatBusy: false,
+    combatBusyUntil: 0,
     lastCombat: null,
 
     draft: {
@@ -3679,12 +3686,20 @@ function unitColors(side) {
     if (elCornerDiceHud) elCornerDiceHud.classList.add('has-roll');
   }
 
+  function diceAnimationDurationMs(rollCount) {
+    const count = Math.max(1, Math.trunc(Number(rollCount) || 1));
+    return DICE_SUMMARY_BASE_MS + ((count - 1) * DICE_SUMMARY_STEP_MS) + DICE_POST_HOLD_MS;
+  }
+
   function clearDiceDisplay() {
     diceRenderNonce += 1;
     if (elDiceSummary) elDiceSummary.textContent = 'No rolls yet.';
     if (elDiceTray) elDiceTray.innerHTML = '';
     renderIdlePhysicalDice();
     renderIdleCornerDice();
+    state.combatBusy = false;
+    state.combatBusyUntil = 0;
+    if (elCornerDiceHud) elCornerDiceHud.classList.remove('combat-active');
     clearCombatBreakdown();
   }
 
@@ -3745,6 +3760,10 @@ function unitColors(side) {
 
     diceRenderNonce += 1;
     const renderNonce = diceRenderNonce;
+    state.combatBusy = true;
+    state.combatBusyUntil = Date.now() + diceAnimationDurationMs(Array.isArray(rolls) ? rolls.length : 0);
+    if (elCornerDiceHud) elCornerDiceHud.classList.add('combat-active');
+    updateHud();
 
     const posText = (info.impactPosition && info.impactPosition !== 'none') ? `, ${info.impactPosition}` : '';
     const pivotText = info.pivoted ? ', pivot' : '';
@@ -3802,7 +3821,7 @@ function unitColors(side) {
         elCornerDiceRow.appendChild(cornerDie);
       }
 
-      const settleDelay = 180 + (i * 80);
+      const settleDelay = DICE_SETTLE_BASE_MS + (i * DICE_SETTLE_STEP_MS);
       setTimeout(() => {
         if (renderNonce !== diceRenderNonce) return;
 
@@ -3837,10 +3856,17 @@ function unitColors(side) {
       }, settleDelay);
     }
 
-    const summaryDelay = 220 + (Math.max(0, rolls.length - 1) * 80);
+    const summaryDelay = DICE_SUMMARY_BASE_MS + (Math.max(0, rolls.length - 1) * DICE_SUMMARY_STEP_MS);
     setTimeout(() => {
       if (renderNonce !== diceRenderNonce) return;
       elDiceSummary.textContent = finalSummary;
+      setTimeout(() => {
+        if (renderNonce !== diceRenderNonce) return;
+        state.combatBusy = false;
+        state.combatBusyUntil = 0;
+        if (elCornerDiceHud) elCornerDiceHud.classList.remove('combat-active');
+        updateHud();
+      }, DICE_POST_HOLD_MS);
     }, summaryDelay);
   }
 
@@ -4508,6 +4534,7 @@ function unitColors(side) {
     const blue = totals('blue');
     const red = totals('red');
     document.body.dataset.mode = state.mode;
+    document.body.dataset.combat = state.combatBusy ? 'on' : 'off';
 
     elHudTitle.textContent = GAME_NAME;
 
@@ -4535,6 +4562,9 @@ function unitColors(side) {
     }
     if (state.aiBusy) {
       meta.push('AI is choosing actions...');
+    }
+    if (state.combatBusy) {
+      meta.push('Combat resolving: dice rolling...');
     }
     if (state.draft.active) {
       if (hideOpponentDuringFog) {
@@ -4706,12 +4736,31 @@ function unitColors(side) {
     state.aiBusy = false;
   }
 
-  function scheduleAiStep(delayMs = aiTimingForDifficulty(state.aiDifficulty).stepMs) {
+  function scheduleAiStep(delayMs = aiTimingForDifficulty(state.aiDifficulty).stepMs, handler = runAiTurnStep) {
     if (state.aiTimer) clearTimeout(state.aiTimer);
     state.aiTimer = setTimeout(() => {
       state.aiTimer = null;
-      runAiTurnStep();
+      handler();
     }, delayMs);
+  }
+
+  function aiPostActionDelayMs(plan) {
+    const timing = aiTimingForDifficulty(state.aiDifficulty);
+    let delay = Math.max(180, timing.stepMs || 0);
+
+    if (plan?.type === 'move') {
+      delay = Math.max(delay, (timing.stepMs || 0) + (timing.movePauseMs || 0));
+    }
+    if (plan?.type === 'attack') {
+      delay = Math.max(delay, timing.combatPauseMs || 0);
+    }
+
+    const combatRemaining = Math.max(0, (state.combatBusyUntil || 0) - Date.now());
+    if (combatRemaining > 0) {
+      delay = Math.max(delay, combatRemaining + 140);
+    }
+
+    return delay;
   }
 
   function nearestEnemyDistance(fromKey, side) {
@@ -4921,12 +4970,15 @@ function unitColors(side) {
     return chooseAiActionPlanStandard();
   }
 
-  function executeAiActionPlan(plan) {
+  function executeAiActionPlan(plan, options = {}) {
     if (!plan) return false;
     const actsBefore = state.actsUsed;
+    const alreadySelected = !!options.alreadySelected;
 
-    selectUnit(plan.fromKey);
-    if (state.selectedKey !== plan.fromKey) return false;
+    if (!alreadySelected || state.selectedKey !== plan.fromKey) {
+      selectUnit(plan.fromKey);
+      if (state.selectedKey !== plan.fromKey) return false;
+    }
 
     if (plan.type === 'attack') {
       if (!state._attackTargets || !state._attackTargets.has(plan.targetKey)) {
@@ -4983,6 +5035,69 @@ function unitColors(side) {
     return false;
   }
 
+  function beginAiPlanExecution(plan) {
+    if (!plan) return false;
+    const timing = aiTimingForDifficulty(state.aiDifficulty);
+    const intentMs = Math.max(
+      120,
+      plan.type === 'pass'
+        ? Math.floor((timing.intentMs || 260) * 0.7)
+        : (timing.intentMs || 260)
+    );
+
+    clearSelection();
+    selectUnit(plan.fromKey);
+    if (state.selectedKey !== plan.fromKey) return false;
+
+    const u = unitsByHex.get(plan.fromKey);
+    const unitDef = u ? UNIT_BY_ID.get(u.type) : null;
+    const unitLabel = u ? `${u.side.toUpperCase()} ${unitDef ? unitDef.abbrev : u.type}` : 'unit';
+    if (plan.type === 'attack') {
+      log(`AI lining up attack with ${unitLabel}...`);
+    } else if (plan.type === 'move') {
+      log(`AI maneuvering ${unitLabel}...`);
+    } else {
+      log(`AI considering pass with ${unitLabel}...`);
+    }
+    updateHud();
+
+    scheduleAiStep(intentMs, () => {
+      if (!isAiTurnActive()) {
+        stopAiLoop();
+        updateHud();
+        return;
+      }
+
+      const acted = executeAiActionPlan(plan, { alreadySelected: true });
+      if (!isAiTurnActive()) {
+        stopAiLoop();
+        updateHud();
+        return;
+      }
+
+      if (!acted) {
+        // Fallback once: try pass with any legal unit, else end turn.
+        if (plan.type !== 'pass') {
+          const passPlan = chooseAiPassPlan();
+          if (passPlan && beginAiPlanExecution(passPlan)) return;
+        }
+        stopAiLoop();
+        endTurn();
+        return;
+      }
+
+      if (state.actsUsed >= ACT_LIMIT) {
+        stopAiLoop();
+        endTurn();
+        return;
+      }
+
+      scheduleAiStep(aiPostActionDelayMs(plan));
+    });
+
+    return true;
+  }
+
   function runAiTurnStep() {
     if (!isAiTurnActive()) {
       stopAiLoop();
@@ -5003,30 +5118,14 @@ function unitColors(side) {
       return;
     }
 
-    const acted = executeAiActionPlan(plan);
-    if (!isAiTurnActive()) {
-      stopAiLoop();
-      updateHud();
-      return;
-    }
-
-    if (!acted) {
-      // Fallback once: try a pass from any legal unit, then give up turn.
+    if (!beginAiPlanExecution(plan)) {
       const passPlan = chooseAiPassPlan();
-      if (!passPlan || !executeAiActionPlan(passPlan)) {
+      if (!passPlan || !beginAiPlanExecution(passPlan)) {
         stopAiLoop();
         endTurn();
         return;
       }
     }
-
-    if (state.actsUsed >= ACT_LIMIT) {
-      stopAiLoop();
-      endTurn();
-      return;
-    }
-
-    scheduleAiStep();
   }
 
   function maybeStartAiTurn() {

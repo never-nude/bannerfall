@@ -81,6 +81,15 @@ body{
   backdrop-filter:blur(2px);
 }
 
+#cornerDiceHud.combat-active{
+  border-color:rgba(216,189,126,0.92);
+  box-shadow:0 0 0 1px rgba(216,189,126,0.2), 0 0 20px rgba(216,189,126,0.25);
+}
+
+body[data-combat="on"] #hudMeta{
+  color:#d8bd7e;
+}
+
 #cornerDiceRow{
   min-height:0;
   padding:0;
