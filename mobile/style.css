@@ -677,6 +677,137 @@ body{
   }
 }
 
+@media (orientation: landscape) and (min-width: 1024px){
+  :root{
+    --hud-h:46px;
+    --combat-h:0px;
+  }
+
+  #hud{
+    padding:6px 12px 4px;
+  }
+  #hudMeta,
+  #hudLast{
+    display:none;
+  }
+  #hudTitle{
+    font-size:17px;
+    letter-spacing:0.12em;
+  }
+
+  #layout{
+    grid-template-columns:1fr;
+    height:calc(100dvh - var(--hud-h));
+    min-height:0;
+  }
+  #canvasWrap{
+    min-height:0;
+    height:100%;
+  }
+
+  #side{
+    position:fixed;
+    top:calc(var(--safe-top) + 52px);
+    right:12px;
+    width:min(24vw, 340px);
+    max-height:38vh;
+    overflow:visible;
+    border:none;
+    padding:0;
+    background:transparent;
+    z-index:42;
+  }
+  #side .panel{
+    display:none;
+  }
+  #turnOrdersPanel{
+    display:block;
+    margin:0;
+    padding:10px;
+    border-color:rgba(255,255,255,0.14);
+    background:rgba(16,16,20,0.94);
+    backdrop-filter:blur(6px);
+  }
+  #turnOrdersPanel .panelTitle{
+    font-size:11px;
+  }
+  #turnOrdersPanel .row{
+    margin:6px 0;
+    gap:6px;
+  }
+  #turnOrdersPanel .label{
+    width:72px;
+  }
+  #turnOrdersPanel .btn,
+  #turnOrdersPanel .select{
+    min-height:38px;
+    font-size:13px;
+    padding:6px 8px;
+  }
+
+  #combatRail{
+    position:fixed;
+    inset:0;
+    height:auto;
+    border:none;
+    background:transparent;
+    padding:0;
+    display:block;
+    overflow:visible;
+    pointer-events:none;
+    z-index:41;
+  }
+  #combatRail .combatCol{
+    position:fixed;
+    pointer-events:auto;
+    width:min(26vw, 360px);
+    max-height:30vh;
+    overflow:auto;
+    padding:8px 10px;
+    border-color:rgba(255,255,255,0.14);
+    background:rgba(15,18,24,0.94);
+    backdrop-filter:blur(6px);
+  }
+  #combatRail .combatColTitle{
+    font-size:10px;
+  }
+  #combatRail .combatSummary,
+  #combatRail .combatMeta{
+    font-size:11px;
+    line-height:1.25;
+  }
+  #combatRail .combatHint{
+    display:none;
+  }
+
+  #combatRail .combatColDice{
+    top:calc(var(--safe-top) + 52px);
+    left:12px;
+  }
+  #combatRail .combatColTerrain{
+    left:12px;
+    bottom:calc(var(--safe-bottom) + 124px);
+  }
+  #combatRail .combatColOutcome{
+    left:12px;
+    bottom:calc(var(--safe-bottom) + 12px);
+  }
+  #combatRail .combatColBreakdown{
+    right:12px;
+    bottom:calc(var(--safe-bottom) + 12px);
+    width:min(34vw, 520px);
+    max-height:34vh;
+  }
+  #combatRail .physicalDiceRow{
+    min-height:60px;
+    padding:6px;
+  }
+  #combatRail .physicalDie{
+    width:42px;
+    height:42px;
+  }
+}
+
 body[data-mode="play"] .editorOnly{
   display:none;
 }
