@@ -33,7 +33,14 @@ body{
   padding:14px 16px;
   border-bottom:1px solid var(--line);
 }
-#hudTitle{font-weight:800;letter-spacing:0.02em;font-size:18px;}
+#hudTitle{
+  font-family:'Cinzel','Trajan Pro','Times New Roman',serif;
+  font-weight:700;
+  letter-spacing:0.09em;
+  font-size:22px;
+  text-transform:uppercase;
+  text-align:center;
+}
 #hudMeta{margin-top:6px;color:var(--muted);font-size:13px;line-height:1.35;}
 #hudLast{
   margin-top:8px;
@@ -522,7 +529,7 @@ body{
 @media (hover: none) and (pointer: coarse){
   :root{ --hud-h:56px; }
   #hud{
-    padding:12px 16px 10px;
+    padding:10px 14px 8px;
   }
   #hudMeta,
   #hudLast{
@@ -530,6 +537,17 @@ body{
   }
   #statusPanel{
     display:block;
+  }
+}
+
+@media (hover: none) and (pointer: coarse) and (orientation: portrait){
+  :root{ --hud-h:48px; }
+  #hud{
+    padding:8px 12px 6px;
+  }
+  #hudTitle{
+    font-size:18px;
+    letter-spacing:0.1em;
   }
 }
 
