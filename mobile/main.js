@@ -401,6 +401,8 @@
   const elStateFileInput = document.getElementById('stateFileInput');
   const elDiceSummary = document.getElementById('diceSummary');
   const elPhysicalDiceRow = document.getElementById('physicalDiceRow');
+  const elCornerDiceHud = document.getElementById('cornerDiceHud');
+  const elCornerDiceRow = document.getElementById('cornerDiceRow');
   const elDiceTray = document.getElementById('diceTray');
   const elInspectorTitle = document.getElementById('inspectorTitle');
   const elInspectorMeta = document.getElementById('inspectorMeta');
@@ -3669,6 +3671,8 @@ function unitColors(side) {
     if (elDiceSummary) elDiceSummary.textContent = 'No rolls yet.';
     if (elDiceTray) elDiceTray.innerHTML = '';
     renderIdlePhysicalDice();
+    if (elCornerDiceRow) elCornerDiceRow.innerHTML = '';
+    if (elCornerDiceHud) elCornerDiceHud.classList.remove('has-roll');
     clearCombatBreakdown();
   }
 
@@ -3744,6 +3748,11 @@ function unitColors(side) {
 
     elDiceTray.innerHTML = '';
     if (elPhysicalDiceRow) elPhysicalDiceRow.innerHTML = '';
+    if (elCornerDiceRow) {
+      elCornerDiceRow.innerHTML = '';
+      if (rolls.length > 0 && elCornerDiceHud) elCornerDiceHud.classList.add('has-roll');
+      else if (elCornerDiceHud) elCornerDiceHud.classList.remove('has-roll');
+    }
     for (let i = 0; i < rolls.length; i++) {
       const roll = rolls[i];
       const die = document.createElement('div');
@@ -3771,6 +3780,17 @@ function unitColors(side) {
         elPhysicalDiceRow.appendChild(physicalDie);
       }
 
+      let cornerDie = null;
+      let cornerFace = null;
+      if (elCornerDiceRow) {
+        const shell = makePhysicalDieShell(1 + Math.floor(Math.random() * 6), 'rolling', 'Rolling…');
+        cornerDie = shell.shell;
+        cornerFace = shell.face;
+        cornerDie.className = 'physicalDie rolling cornerDie';
+        cornerDie.style.setProperty('--dice-rot', `${Math.floor(Math.random() * 13) - 6}deg`);
+        elCornerDiceRow.appendChild(cornerDie);
+      }
+
       const settleDelay = 180 + (i * 80);
       setTimeout(() => {
         if (renderNonce !== diceRenderNonce) return;
@@ -3795,6 +3815,13 @@ function unitColors(side) {
           physicalDie.className = `physicalDie ${outcome}`;
           physicalDie.style.setProperty('--dice-rot', `${Math.floor(Math.random() * 11) - 5}deg`);
           physicalDie.title = `Roll ${roll} (${badge})`;
+        }
+
+        if (cornerDie && cornerFace) {
+          applyPhysicalDieFace(cornerFace, roll);
+          cornerDie.className = `physicalDie ${outcome} cornerDie`;
+          cornerDie.style.setProperty('--dice-rot', `${Math.floor(Math.random() * 9) - 4}deg`);
+          cornerDie.title = `Roll ${roll} (${badge})`;
         }
       }, settleDelay);
     }

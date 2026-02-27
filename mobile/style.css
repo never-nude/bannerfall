@@ -67,6 +67,44 @@ body{
   -webkit-tap-highlight-color:transparent;
 }
 
+#cornerDiceHud{
+  position:absolute;
+  top:8px;
+  left:8px;
+  z-index:6;
+  pointer-events:none;
+  display:none;
+  padding:4px 6px;
+  border-radius:10px;
+  border:1px solid rgba(255,255,255,0.18);
+  background:rgba(8,10,14,0.5);
+  backdrop-filter:blur(2px);
+}
+
+#cornerDiceRow{
+  min-height:0;
+  padding:0;
+  gap:5px;
+  border:none;
+  background:transparent;
+}
+
+#cornerDiceRow .cornerDie{
+  width:24px;
+  height:24px;
+  border-radius:6px;
+}
+
+#cornerDiceRow .cornerDie .physicalFace{
+  inset:3px;
+  border-radius:4px;
+}
+
+#cornerDiceRow .cornerDie .physicalPip{
+  width:4px;
+  height:4px;
+}
+
 #side{
   border-left:1px solid var(--line);
   padding:12px;
@@ -572,6 +610,12 @@ body{
   }
   #statusPanel{
     display:block;
+  }
+}
+
+@media (hover: none) and (pointer: coarse) and (orientation: landscape){
+  #cornerDiceHud.has-roll{
+    display:flex;
   }
 }
 
