@@ -3221,11 +3221,15 @@ function unitColors(side) {
       const k = h.k;
       if (state.mode === 'play' && state.selectedKey) {
         if (state._moveTargets?.has(k)) {
-          ctx.strokeStyle = '#4aa3ff';
-          ctx.lineWidth = 3;
+          ctx.save();
+          ctx.strokeStyle = '#5db8ff';
+          ctx.lineWidth = Math.max(4, Math.round(R * 0.18));
+          ctx.shadowColor = 'rgba(93, 184, 255, 0.42)';
+          ctx.shadowBlur = Math.max(4, Math.round(R * 0.35));
           ctx.setLineDash([6, 6]);
           ctx.stroke(p);
           ctx.setLineDash([]);
+          ctx.restore();
         }
         if (state._attackTargets?.has(k)) {
           ctx.strokeStyle = '#ff5050';
