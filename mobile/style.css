@@ -597,6 +597,10 @@ body.rules-open{
   padding-left:calc(var(--safe-left) + 14px);
 }
 
+.rulesModal[hidden]{
+  display:none !important;
+}
+
 .rulesBackdrop{
   position:absolute;
   inset:0;
