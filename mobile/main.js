@@ -4530,11 +4530,12 @@ function unitColors(side) {
     const guestOnlineLock = onlineMode && net.connected && !net.isHost;
     const aiMode = (state.gameMode === 'hvai');
     if (elAiDifficultyRow) {
-      elAiDifficultyRow.style.display = aiMode ? '' : 'none';
+      elAiDifficultyRow.style.display = '';
+      elAiDifficultyRow.style.opacity = aiMode ? '1' : '0.66';
     }
     if (elAiDifficultySel) {
       elAiDifficultySel.value = normalizeAiDifficulty(state.aiDifficulty);
-      elAiDifficultySel.disabled = !aiMode || state.aiBusy || guestOnlineLock;
+      elAiDifficultySel.disabled = state.aiBusy || guestOnlineLock;
     }
     const shownCode = normalizeOnlineCode(net.isHost ? net.myCode : net.remoteCode);
     elModeBtn.disabled = guestOnlineLock;
