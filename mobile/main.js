@@ -93,6 +93,7 @@
   };
   const RANDOM_START_SCENARIO_NAME = 'Randomized Opening (Auto)';
   const RANDOM_START_UNITS_PER_SIDE = 30;
+  const SCENARIO_UNIT_CAP_PER_SIDE = 30;
   const DRAFT_BUDGET_MIN = 20;
   const DRAFT_BUDGET_MAX = 300;
   const DRAFT_BUDGET_DEFAULT = 120;
@@ -6343,6 +6344,159 @@ function unitColors(side) {
     return 'green';
   }
 
+  function qualityTargetCounts(type, count) {
+    if (count <= 0) return { veteran: 0, regular: 0, green: 0 };
+    if (type === 'iat') return { veteran: 0, regular: count, green: 0 };
+
+    let veteranRatio = 0.20;
+    let regularRatio = 0.55;
+
+    if (type === 'cav') {
+      veteranRatio = 0.34;
+      regularRatio = 0.46;
+    } else if (type === 'inf') {
+      veteranRatio = 0.16;
+      regularRatio = 0.64;
+    } else if (type === 'arc') {
+      veteranRatio = 0.22;
+      regularRatio = 0.58;
+    } else if (type === 'skr') {
+      veteranRatio = 0.24;
+      regularRatio = 0.52;
+    } else if (type === 'gen' || type === 'run') {
+      veteranRatio = 0.24;
+      regularRatio = 0.60;
+    }
+
+    let veteran = Math.max(0, Math.round(count * veteranRatio));
+    let regular = Math.max(0, Math.round(count * regularRatio));
+    if (veteran + regular > count) regular = Math.max(0, count - veteran);
+    let green = Math.max(0, count - veteran - regular);
+
+    // Keep at least one green in larger groups so the line is not uniformly elite.
+    if (count >= 6 && green === 0) {
+      green = 1;
+      if (regular > veteran && regular > 0) regular -= 1;
+      else if (veteran > 0) veteran -= 1;
+    }
+
+    return { veteran, regular, green };
+  }
+
+  function pickQualityAnchor(entries, scoreFn) {
+    if (!entries.length) return null;
+    let best = entries[0];
+    let bestScore = -Infinity;
+    for (const e of entries) {
+      const score = scoreFn(e);
+      if (score > bestScore) {
+        bestScore = score;
+        best = e;
+      }
+    }
+    return best;
+  }
+
+  function groupedQualityScores(type, depthN, flankN, centerN) {
+    if (type === 'cav') {
+      return {
+        veteran: (depthN * 1.0) + (flankN * 1.35),
+        regular: (depthN * 0.75) + (flankN * 0.6),
+      };
+    }
+    if (type === 'inf') {
+      return {
+        veteran: (depthN * 0.95) + (centerN * 1.0),
+        regular: (depthN * 0.70) + (centerN * 1.2),
+      };
+    }
+    if (type === 'arc') {
+      return {
+        veteran: ((1 - depthN) * 1.1) + (centerN * 0.7),
+        regular: ((1 - depthN) * 1.0) + (centerN * 1.0),
+      };
+    }
+    if (type === 'skr') {
+      return {
+        veteran: (depthN * 0.8) + (flankN * 0.8),
+        regular: (depthN * 0.65) + (centerN * 0.6),
+      };
+    }
+    if (type === 'gen' || type === 'run') {
+      return {
+        veteran: ((1 - depthN) * 0.7) + (centerN * 1.05),
+        regular: ((1 - depthN) * 1.0) + (centerN * 1.1),
+      };
+    }
+    return {
+      veteran: (depthN * 0.8) + (centerN * 0.8),
+      regular: (depthN * 0.7) + (centerN * 0.9),
+    };
+  }
+
+  function assignGroupedQualitiesForType(entries, side, type, geometry) {
+    if (!entries || entries.length === 0) return;
+    if (type === 'iat') {
+      for (const e of entries) e.quality = 'regular';
+      return;
+    }
+
+    const targets = qualityTargetCounts(type, entries.length);
+    const withMeta = entries.map((e) => {
+      const meta = geometry.byKey.get(key(e.q, e.r)) || null;
+      const depthN = sideDepthNorm(meta, side);
+      const flankN = meta ? Math.abs(meta.lateralN - 0.5) * 2 : 0;
+      const centerN = 1 - Math.min(1, flankN);
+      const scores = groupedQualityScores(type, depthN, flankN, centerN);
+      return {
+        e,
+        veteranScore: scores.veteran,
+        regularScore: scores.regular,
+      };
+    });
+
+    const veteranAnchor = pickQualityAnchor(withMeta, (x) => x.veteranScore);
+    const regularAnchor = pickQualityAnchor(withMeta, (x) => {
+      const distFromVeteran = veteranAnchor
+        ? axialDistance(x.e.q, x.e.r, veteranAnchor.e.q, veteranAnchor.e.r)
+        : 0;
+      return x.regularScore + (distFromVeteran * 0.08);
+    });
+
+    const pool = withMeta.slice();
+    function takeNearest(anchor, count, tieKey) {
+      if (!anchor || count <= 0 || pool.length === 0) return [];
+      pool.sort((a, b) => {
+        const da = axialDistance(a.e.q, a.e.r, anchor.e.q, anchor.e.r);
+        const db = axialDistance(b.e.q, b.e.r, anchor.e.q, anchor.e.r);
+        if (da !== db) return da - db;
+        const ak = (typeof a[tieKey] === 'number') ? a[tieKey] : a.regularScore;
+        const bk = (typeof b[tieKey] === 'number') ? b[tieKey] : b.regularScore;
+        return bk - ak;
+      });
+      return pool.splice(0, Math.min(count, pool.length));
+    }
+
+    const veterans = takeNearest(veteranAnchor, targets.veteran, 'veteranScore');
+    const regulars = takeNearest(regularAnchor, targets.regular, 'regularScore');
+    const greens = pool;
+
+    for (const p of veterans) p.e.quality = 'veteran';
+    for (const p of regulars) p.e.quality = 'regular';
+    for (const p of greens) p.e.quality = 'green';
+  }
+
+  function assignGroupedForceQualities(force, side, geometry) {
+    const byType = new Map();
+    for (const e of force) {
+      if (!byType.has(e.type)) byType.set(e.type, []);
+      byType.get(e.type).push(e);
+    }
+    for (const [type, entries] of byType) {
+      assignGroupedQualitiesForType(entries, side, type, geometry);
+    }
+  }
+
   function chooseRandomForwardAxis() {
     const roll = Math.random();
     if (roll < 0.30) return 'vertical';
@@ -6625,7 +6779,7 @@ function unitColors(side) {
           r: spot.r,
           side,
           type,
-          quality: randomQualityForType(type),
+          quality: 'green',
         });
       }
     }
@@ -6649,10 +6803,11 @@ function unitColors(side) {
         r: spot.r,
         side,
         type,
-        quality: randomQualityForType(type),
+        quality: 'green',
       });
     }
 
+    assignGroupedForceQualities(force, side, geometry);
     return force;
   }
 
@@ -6695,6 +6850,7 @@ function unitColors(side) {
       unitsSkippedOffBoard: 0,
       unitsSkippedBadType: 0,
       unitsSkippedBadSide: 0,
+      unitsSkippedCap: 0,
       unitsDuplicates: 0,
     };
 
@@ -6730,6 +6886,7 @@ function unitColors(side) {
 
     // Units
     const seenUnitHexes = new Set();
+    const sideCounts = { blue: 0, red: 0 };
     for (const u of (sc.units || [])) {
       const k = key(u.q, u.r);
       if (!board.activeSet.has(k)) {
@@ -6748,6 +6905,10 @@ function unitColors(side) {
         stats.unitsSkippedBadSide += 1;
         continue;
       }
+      if (sideCounts[u.side] >= SCENARIO_UNIT_CAP_PER_SIDE) {
+        stats.unitsSkippedCap += 1;
+        continue;
+      }
 
       const quality = normalizeQuality(u.type, u.quality || 'green');
       unitsByHex.set(k, {
@@ -6757,17 +6918,22 @@ function unitColors(side) {
         quality,
         hp: unitMaxHp(u.type, quality),
       });
+      sideCounts[u.side] += 1;
       stats.unitsPlaced += 1;
     }
 
-    log(`Loaded scenario: ${name} (units=${stats.unitsPlaced}, terrain=${stats.terrainPlaced}).`);
+    log(
+      `Loaded scenario: ${name} (units=${stats.unitsPlaced}, terrain=${stats.terrainPlaced}, ` +
+      `cap=${SCENARIO_UNIT_CAP_PER_SIDE}/side).`
+    );
 
     const skippedTotal =
       stats.terrainSkippedOffBoard +
       stats.terrainSkippedInvalidType +
       stats.unitsSkippedOffBoard +
       stats.unitsSkippedBadType +
-      stats.unitsSkippedBadSide;
+      stats.unitsSkippedBadSide +
+      stats.unitsSkippedCap;
     const duplicateTotal = stats.terrainDuplicates + stats.unitsDuplicates;
 
     if (skippedTotal > 0 || duplicateTotal > 0) {
@@ -6775,7 +6941,7 @@ function unitColors(side) {
         `Scenario warnings: skipped=${skippedTotal} ` +
         `(terrain offboard ${stats.terrainSkippedOffBoard}, terrain invalid ${stats.terrainSkippedInvalidType}, ` +
         `units offboard ${stats.unitsSkippedOffBoard}, units bad type ${stats.unitsSkippedBadType}, ` +
-        `units bad side ${stats.unitsSkippedBadSide}) · duplicates=${duplicateTotal} ` +
+        `units bad side ${stats.unitsSkippedBadSide}, units capped ${stats.unitsSkippedCap}) · duplicates=${duplicateTotal} ` +
         `(terrain ${stats.terrainDuplicates}, units ${stats.unitsDuplicates}).`
       );
     }

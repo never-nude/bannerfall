@@ -1,1 +1,1 @@
-window.POLEMO_BUILD_ID = '20260227-165400-board-fit-v17';
+window.POLEMO_BUILD_ID = '20260227-172000-force-cap-v18';
