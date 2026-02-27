@@ -101,6 +101,9 @@
   const DICE_SUMMARY_BASE_MS = 520;
   const DICE_SUMMARY_STEP_MS = 210;
   const DICE_POST_HOLD_MS = 420;
+  const MOVE_ANIM_MS_HUMAN = 220;
+  const MOVE_ANIM_MS_AI = 520;
+  const ATTACK_FLASH_MS = 920;
 
   // Dice faces: 5–6 = Hit, 4 = Retreat.
   const DIE_HIT = new Set([5, 6]);
@@ -491,8 +494,13 @@
     lastImport: null, // { source, at }
     aiBusy: false,
     aiTimer: null,
+    aiQueuedFollowup: null,
     combatBusy: false,
     combatBusyUntil: 0,
+    moveAnim: null,
+    moveAnimUntil: 0,
+    attackFlash: null,
+    animFrame: null,
     lastCombat: null,
 
     draft: {
@@ -3235,7 +3243,136 @@ function unitColors(side) {
     }
   }
 
+  function ensureVisualAnimationLoop() {
+    if (state.animFrame) return;
+    state.animFrame = requestAnimationFrame(function tick() {
+      state.animFrame = null;
+      const now = Date.now();
+      const moveActive = !!(state.moveAnim && now < state.moveAnim.endAt);
+      const flashActive = !!(state.attackFlash && now < state.attackFlash.endAt);
+      draw();
+      if (moveActive || flashActive) ensureVisualAnimationLoop();
+    });
+  }
+
+  function startMoveAnimation(fromKey, toKey, unit) {
+    if (!unit || !fromKey || !toKey || fromKey === toKey) return;
+    if (!board.activeSet.has(fromKey) || !board.activeSet.has(toKey)) return;
+
+    const aiSideMove = isAiTurnActive() && unit.side === state.side;
+    const durationMs = aiSideMove ? MOVE_ANIM_MS_AI : MOVE_ANIM_MS_HUMAN;
+    const now = Date.now();
+    state.moveAnim = {
+      unitId: unit.id,
+      fromKey,
+      toKey,
+      startAt: now,
+      endAt: now + durationMs,
+      unit: {
+        side: unit.side,
+        type: unit.type,
+        quality: unit.quality,
+        hp: unit.hp,
+      },
+    };
+    state.moveAnimUntil = state.moveAnim.endAt;
+    ensureVisualAnimationLoop();
+  }
+
+  function setAttackFlash(hexKey, durationMs = ATTACK_FLASH_MS) {
+    if (!hexKey || !board.activeSet.has(hexKey)) return;
+    const now = Date.now();
+    state.attackFlash = {
+      hexKey,
+      startAt: now,
+      endAt: now + Math.max(120, durationMs),
+    };
+    ensureVisualAnimationLoop();
+  }
+
+  function drawAnimatedUnitToken(anim, nowMs) {
+    if (!anim) return;
+    const hFrom = board.byKey.get(anim.fromKey);
+    const hTo = board.byKey.get(anim.toKey);
+    if (!hFrom || !hTo || !anim.unit) return;
+
+    const span = Math.max(1, anim.endAt - anim.startAt);
+    const tRaw = (nowMs - anim.startAt) / span;
+    const t = Math.max(0, Math.min(1, tRaw));
+    const ease = t < 0.5 ? (2 * t * t) : (1 - (Math.pow(-2 * t + 2, 2) / 2));
+    const cx = hFrom.cx + ((hTo.cx - hFrom.cx) * ease);
+    const cy = hFrom.cy + ((hTo.cy - hFrom.cy) * ease);
+    const u = anim.unit;
+
+    const c = unitColors(u.side);
+    ctx.save();
+    ctx.globalAlpha = 0.98;
+
+    ctx.beginPath();
+    ctx.arc(cx, cy, R * 0.55, 0, Math.PI * 2);
+    ctx.fillStyle = c.fill;
+    ctx.fill();
+
+    ctx.lineWidth = Math.max(2, Math.floor(R * 0.12));
+    ctx.strokeStyle = qualityStroke(u.quality);
+    ctx.stroke();
+
+    const def = UNIT_BY_ID.get(u.type);
+    const canIcon = (u.type !== 'gen') && unitIconReady && unitIconReady(u.type);
+    if (u.type === 'run') {
+      drawRunnerFootGlyph(cx, cy, R * 0.82);
+    } else if (canIcon) {
+      const img = UNIT_ICONS && UNIT_ICONS[u.type];
+      if (img) {
+        const base = R * 0.95;
+        const tune = (UNIT_ICON_TUNE && UNIT_ICON_TUNE[u.type]) ? UNIT_ICON_TUNE[u.type] : { scale: 0.95, y: 0 };
+        const s = Math.floor(base * (tune.scale || 0.95));
+        const yOff = Math.floor(R * (tune.y || 0));
+        const rot = (typeof tune.rot === 'number') ? tune.rot : 0;
+        if (rot) {
+          ctx.save();
+          ctx.translate(Math.floor(cx), Math.floor(cy + yOff));
+          ctx.rotate(rot);
+          ctx.drawImage(img, Math.floor(-s / 2), Math.floor(-s / 2), s, s);
+          ctx.restore();
+        } else {
+          ctx.drawImage(img, Math.floor(cx - s / 2), Math.floor(cy - s / 2 + yOff), s, s);
+        }
+      }
+    } else {
+      const textScale = (u.type === 'inf' || u.type === 'cav' || u.type === 'skr') ? 0.83 : 1.0;
+      const fontPx = Math.floor(R * 0.55 * textScale);
+      ctx.font = `700 ${fontPx}px system-ui, -apple-system, Segoe UI, Roboto, sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = c.text;
+      ctx.fillText(def ? def.symbol : '?', cx, cy + 1);
+    }
+
+    const maxHp = unitMaxHp(u.type, u.quality);
+    const pipR = Math.max(2, Math.floor(R * 0.07));
+    const startX = cx - (pipR * 2) * (maxHp - 1) * 0.5;
+    const y = cy + R * 0.78;
+    for (let i = 0; i < maxHp; i++) {
+      ctx.beginPath();
+      ctx.arc(startX + i * (pipR * 2), y, pipR, 0, Math.PI * 2);
+      ctx.fillStyle = (i < u.hp) ? '#fff' : '#ffffff33';
+      ctx.fill();
+    }
+
+    ctx.restore();
+  }
+
   function draw() {
+    const nowMs = Date.now();
+    if (state.moveAnim && nowMs >= state.moveAnim.endAt) {
+      state.moveAnim = null;
+      state.moveAnimUntil = 0;
+    }
+    if (state.attackFlash && nowMs >= state.attackFlash.endAt) {
+      state.attackFlash = null;
+    }
+
     ctx.clearRect(0, 0, elCanvas.width, elCanvas.height);
 
     // Background
@@ -3289,6 +3426,21 @@ function unitColors(side) {
         }
       }
 
+      if (state.attackFlash && state.attackFlash.hexKey === k) {
+        const span = Math.max(1, state.attackFlash.endAt - state.attackFlash.startAt);
+        const phase = Math.max(0, Math.min(1, (nowMs - state.attackFlash.startAt) / span));
+        const pulse = 0.55 + (Math.sin((phase * Math.PI * 4)) * 0.25);
+        ctx.save();
+        ctx.fillStyle = `rgba(255, 60, 60, ${0.15 + (pulse * 0.15)})`;
+        ctx.fill(p);
+        ctx.strokeStyle = `rgba(255, 88, 88, ${0.70 + (pulse * 0.25)})`;
+        ctx.lineWidth = Math.max(4, Math.round(R * 0.22));
+        ctx.shadowColor = 'rgba(255, 70, 70, 0.7)';
+        ctx.shadowBlur = Math.max(8, Math.round(R * 0.55));
+        ctx.stroke(p);
+        ctx.restore();
+      }
+
       // Hover
       if (state._hoverKey === k) {
         ctx.strokeStyle = '#ffffff55';
@@ -3326,6 +3478,7 @@ function unitColors(side) {
     // Units
     for (const [hk, u] of unitsByHex) {
       if (!isUnitVisibleForCurrentView(u)) continue;
+      if (state.moveAnim && state.moveAnim.unitId === u.id && state.moveAnim.toKey === hk) continue;
       const h = board.byKey.get(hk);
       if (!h) continue;
 
@@ -3424,6 +3577,10 @@ function unitColors(side) {
         ctx.stroke();
         ctx.setLineDash([]);
       }
+    }
+
+    if (state.moveAnim) {
+      drawAnimatedUnitToken(state.moveAnim, nowMs);
     }
   }
 
@@ -4733,6 +4890,7 @@ function unitColors(side) {
       clearTimeout(state.aiTimer);
       state.aiTimer = null;
     }
+    state.aiQueuedFollowup = null;
     state.aiBusy = false;
   }
 
@@ -4753,6 +4911,11 @@ function unitColors(side) {
     }
     if (plan?.type === 'attack') {
       delay = Math.max(delay, timing.combatPauseMs || 0);
+    }
+
+    const moveRemaining = Math.max(0, (state.moveAnimUntil || 0) - Date.now());
+    if (moveRemaining > 0) {
+      delay = Math.max(delay, moveRemaining + 120);
     }
 
     const combatRemaining = Math.max(0, (state.combatBusyUntil || 0) - Date.now());
@@ -5013,7 +5176,16 @@ function unitColors(side) {
           }
         }
         if (bestTargetKey && state._attackTargets.has(bestTargetKey)) {
-          attackFromSelection(bestTargetKey);
+          if (isAiTurnActive()) {
+            const timing = aiTimingForDifficulty(state.aiDifficulty);
+            state.aiQueuedFollowup = {
+              fromKey: plan.destKey,
+              targetKey: bestTargetKey,
+              delayMs: Math.max(180, timing.movePauseMs || 0),
+            };
+          } else {
+            attackFromSelection(bestTargetKey);
+          }
         } else {
           clearSelection();
           updateHud();
@@ -5089,6 +5261,39 @@ function unitColors(side) {
       if (state.actsUsed >= ACT_LIMIT) {
         stopAiLoop();
         endTurn();
+        return;
+      }
+
+      if (state.aiQueuedFollowup) {
+        const queued = state.aiQueuedFollowup;
+        state.aiQueuedFollowup = null;
+        scheduleAiStep(queued.delayMs, () => {
+          if (!isAiTurnActive()) {
+            stopAiLoop();
+            updateHud();
+            return;
+          }
+
+          if (state.selectedKey === queued.fromKey && state._attackTargets && state._attackTargets.has(queued.targetKey)) {
+            setAttackFlash(queued.targetKey, ATTACK_FLASH_MS + 180);
+            attackFromSelection(queued.targetKey);
+          } else {
+            clearSelection();
+            updateHud();
+          }
+
+          if (!isAiTurnActive()) {
+            stopAiLoop();
+            updateHud();
+            return;
+          }
+          if (state.actsUsed >= ACT_LIMIT) {
+            stopAiLoop();
+            endTurn();
+            return;
+          }
+          scheduleAiStep(aiPostActionDelayMs({ type: 'attack' }));
+        });
         return;
       }
 
@@ -7050,6 +7255,7 @@ function unitColors(side) {
     unitsByHex.set(destKey, u);
     state.selectedKey = destKey;
     state.act.moved = true;
+    startMoveAnimation(fromKey, destKey, u);
 
     if (isPostAttackWithdraw) {
       log(`Veteran CAV disengaged to ${destKey}.`);
@@ -7155,6 +7361,7 @@ function unitColors(side) {
       state.act.committed = true;
     }
 
+    setAttackFlash(targetKey);
     resolveAttack(attackerKey, targetKey);
 
     state.act.attacked = true;
