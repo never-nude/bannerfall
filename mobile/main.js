@@ -84,9 +84,13 @@
   const ENABLE_CAV_ANGLE_BONUS = false;
   const CAV_FLANK_BONUS = 1;
   const CAV_REAR_BONUS = 2;
-  // AI pace intentionally slowed so piece-by-piece actions are easier to follow.
-  const AI_STEP_DELAY_MS = 400; // ~60% slower than the previous 240ms pace
-  const AI_START_DELAY_MS = 300;
+  const AI_DIFFICULTY_IDS = new Set(['easy', 'standard', 'hard']);
+  // Different pacing/quality profiles by AI difficulty.
+  const AI_TIMING_BY_DIFFICULTY = {
+    easy: { startMs: 620, stepMs: 760 },
+    standard: { startMs: 320, stepMs: 420 },
+    hard: { startMs: 180, stepMs: 250 },
+  };
   const RANDOM_START_SCENARIO_NAME = 'Randomized Opening (Auto)';
   const RANDOM_START_UNITS_PER_SIDE = 30;
   const DRAFT_BUDGET_MIN = 20;
@@ -185,6 +189,22 @@
 
   function normalizeForwardAxis(axis) {
     return FORWARD_AXIS_IDS.has(axis) ? axis : 'vertical';
+  }
+
+  function normalizeAiDifficulty(level) {
+    return AI_DIFFICULTY_IDS.has(level) ? level : 'standard';
+  }
+
+  function aiDifficultyLabel(level) {
+    const id = normalizeAiDifficulty(level);
+    if (id === 'easy') return 'Easy';
+    if (id === 'hard') return 'Hard';
+    return 'Standard';
+  }
+
+  function aiTimingForDifficulty(level) {
+    const id = normalizeAiDifficulty(level);
+    return AI_TIMING_BY_DIFFICULTY[id] || AI_TIMING_BY_DIFFICULTY.standard;
   }
 
   function forwardAxisLabel(axis) {
@@ -346,6 +366,8 @@
 
   const elModeBtn = document.getElementById('modeBtn');
   const elGameModeSel = document.getElementById('gameModeSel');
+  const elAiDifficultyRow = document.getElementById('aiDifficultyRow');
+  const elAiDifficultySel = document.getElementById('aiDifficultySel');
   const elForwardAxisSel = document.getElementById('forwardAxisSel');
   const elToolUnits = document.getElementById('toolUnits');
   const elToolTerrain = document.getElementById('toolTerrain');
@@ -432,6 +454,7 @@
 
     // Play
     gameMode: 'hvai', // 'hvh' | 'hvai' | 'online'
+    aiDifficulty: 'standard', // 'easy' | 'standard' | 'hard'
     forwardAxis: 'vertical', // 'vertical' | 'horizontal' | 'diag_tl_br' | 'diag_tr_bl'
     turn: 1,
     side: 'blue',
@@ -4453,9 +4476,12 @@ function unitColors(side) {
     const hideOpponentDuringFog = state.draft.active && state.draft.mode === 'fog' && !state.draft.reveal;
     const modeLabel = (state.mode === 'play') ? 'Play Mode' : 'Setup Mode';
     const sideLabel = (state.side === 'blue') ? 'Blue' : 'Red';
+    const aiMeta = (state.gameMode === 'hvai')
+      ? ` • Red AI (${aiDifficultyLabel(state.aiDifficulty)})`
+      : '';
     const modeMeta =
       state.gameMode === 'online' ? ' • Online mode' :
-      (state.gameMode === 'hvai' ? ' • Red AI enabled' : '');
+      aiMeta;
     const meta = [
       `${modeLabel}${modeMeta}`,
       `Battle Line: ${forwardAxisLabel(state.forwardAxis)}`,
@@ -4502,6 +4528,14 @@ function unitColors(side) {
     }
     const onlineMode = onlineModeActive();
     const guestOnlineLock = onlineMode && net.connected && !net.isHost;
+    const aiMode = (state.gameMode === 'hvai');
+    if (elAiDifficultyRow) {
+      elAiDifficultyRow.style.display = aiMode ? '' : 'none';
+    }
+    if (elAiDifficultySel) {
+      elAiDifficultySel.value = normalizeAiDifficulty(state.aiDifficulty);
+      elAiDifficultySel.disabled = !aiMode || state.aiBusy || guestOnlineLock;
+    }
     const shownCode = normalizeOnlineCode(net.isHost ? net.myCode : net.remoteCode);
     elModeBtn.disabled = guestOnlineLock;
     if (elOnlineMyCode) {
@@ -4633,7 +4667,7 @@ function unitColors(side) {
     state.aiBusy = false;
   }
 
-  function scheduleAiStep(delayMs = AI_STEP_DELAY_MS) {
+  function scheduleAiStep(delayMs = aiTimingForDifficulty(state.aiDifficulty).stepMs) {
     if (state.aiTimer) clearTimeout(state.aiTimer);
     state.aiTimer = setTimeout(() => {
       state.aiTimer = null;
@@ -4656,7 +4690,7 @@ function unitColors(side) {
     return best;
   }
 
-  function aiAttackScore(attackerKey, targetKey, attackerUnit) {
+  function aiAttackScore(attackerKey, targetKey, attackerUnit, difficulty = 'standard') {
     const prof = attackDiceFor(attackerKey, targetKey, attackerUnit);
     if (!prof) return -Infinity;
 
@@ -4670,15 +4704,26 @@ function unitColors(side) {
     score += unitUpValue(target.type, target.quality);
     score += Math.max(0, 3 - target.hp) * 2;
     if (!retreatPick(attackerKey, targetKey)) score += 2;
+
+    const level = normalizeAiDifficulty(difficulty);
+    if (level === 'easy') {
+      // Easy AI often misses strategic command targets.
+      if (target.type === 'gen') score -= 10;
+      if (prof.kind === 'ranged') score += 1;
+    } else if (level === 'hard') {
+      if (target.type === 'gen') score += 8;
+      if (target.hp <= 2) score += 6;
+      if (prof.kind === 'melee' && !retreatPick(attackerKey, targetKey)) score += 3;
+    }
     return score;
   }
 
-  function bestAiAttackFrom(attackerKey, attackerUnit) {
+  function bestAiAttackFrom(attackerKey, attackerUnit, difficulty = 'standard') {
     let bestTargetKey = null;
     let bestScore = -Infinity;
     const targets = computeAttackTargets(attackerKey, attackerUnit);
     for (const targetKey of targets) {
-      const score = aiAttackScore(attackerKey, targetKey, attackerUnit);
+      const score = aiAttackScore(attackerKey, targetKey, attackerUnit, difficulty);
       if (score > bestScore) {
         bestScore = score;
         bestTargetKey = targetKey;
@@ -4688,8 +4733,9 @@ function unitColors(side) {
     return { targetKey: bestTargetKey, score: bestScore };
   }
 
-  function aiMoveScore(fromKey, destKey, unit, actCtx) {
+  function aiMoveScore(fromKey, destKey, unit, actCtx, difficulty = 'standard') {
     let score = 0;
+    const level = normalizeAiDifficulty(difficulty);
 
     const fromDist = nearestEnemyDistance(fromKey, unit.side);
     const toDist = nearestEnemyDistance(destKey, unit.side);
@@ -4698,8 +4744,12 @@ function unitColors(side) {
       score += Math.max(0, 8 - toDist) * 0.5;
     }
 
-    const follow = bestAiAttackFrom(destKey, unit);
-    if (follow) score += 4 + follow.score * 0.2;
+    const follow = bestAiAttackFrom(destKey, unit, difficulty);
+    if (follow) {
+      if (level === 'easy') score += 1.5 + follow.score * 0.1;
+      else if (level === 'hard') score += 6 + follow.score * 0.34;
+      else score += 4 + follow.score * 0.2;
+    }
 
     if (isEngaged(destKey, unit.side)) score += 2;
 
@@ -4707,7 +4757,7 @@ function unitColors(side) {
       const inCmd = inCommandAt(destKey, unit.side);
       if (!inCmd) {
         // Prefer not drifting command-dependent units away from command links.
-        score -= 3;
+        score -= (level === 'hard') ? 6 : 3;
       } else if (actCtx.inCommandStart) {
         score += 0.5;
       }
@@ -4718,6 +4768,13 @@ function unitColors(side) {
       if (h.terrain === 'hills') score += 0.5;
       if (h.terrain === 'woods' && unit.type !== 'cav') score += 0.5;
       if (h.terrain === 'rough' && unit.type === 'cav') score -= 0.75;
+    }
+
+    if (level === 'easy') {
+      if (Number.isFinite(toDist) && toDist <= 2) score -= 1.5;
+    } else if (level === 'hard') {
+      if (Number.isFinite(toDist) && toDist <= 2) score += 1.25;
+      if (unit.type === 'gen' && isEngaged(destKey, unit.side)) score -= 6;
     }
 
     return score;
@@ -4731,13 +4788,9 @@ function unitColors(side) {
     return null;
   }
 
-  function chooseAiActionPlan() {
-    let bestAttack = null;
-    let bestAttackScore = -Infinity;
-
-    let bestMove = null;
-    let bestMoveScore = -Infinity;
-
+  function collectAiCandidatePlans(difficulty = 'standard') {
+    const attacks = [];
+    const moves = [];
     let passPlan = null;
 
     for (const [fromKey, u] of unitsByHex) {
@@ -4745,15 +4798,15 @@ function unitColors(side) {
 
       if (!passPlan) passPlan = { type: 'pass', fromKey };
 
-      const attack = bestAiAttackFrom(fromKey, u);
-      if (attack && attack.score > bestAttackScore) {
-        bestAttackScore = attack.score;
-        bestAttack = {
+      const attackTargets = computeAttackTargets(fromKey, u);
+      for (const targetKey of attackTargets) {
+        const score = aiAttackScore(fromKey, targetKey, u, difficulty);
+        attacks.push({
           type: 'attack',
           fromKey,
-          targetKey: attack.targetKey,
-          score: attack.score,
-        };
+          targetKey,
+          score,
+        });
       }
 
       const actCtx = {
@@ -4761,22 +4814,72 @@ function unitColors(side) {
       };
       const moveTargets = computeMoveTargets(fromKey, u, actCtx);
       for (const destKey of moveTargets) {
-        const score = aiMoveScore(fromKey, destKey, u, actCtx);
-        if (score > bestMoveScore) {
-          bestMoveScore = score;
-          bestMove = {
-            type: 'move',
-            fromKey,
-            destKey,
-            score,
-          };
-        }
+        const score = aiMoveScore(fromKey, destKey, u, actCtx, difficulty);
+        moves.push({
+          type: 'move',
+          fromKey,
+          destKey,
+          score,
+        });
+      }
+    }
+
+    return { attacks, moves, passPlan };
+  }
+
+  function chooseAiActionPlanEasy() {
+    const { attacks, moves, passPlan } = collectAiCandidatePlans('easy');
+    const pool = [...attacks, ...moves];
+    if (!pool.length) return passPlan;
+
+    // Easy AI intentionally picks from weaker options more often.
+    pool.sort((a, b) => a.score - b.score);
+    const weakPoolSize = Math.max(1, Math.ceil(pool.length * 0.55));
+    const weakIndex = Math.floor(Math.random() * weakPoolSize);
+    if (passPlan && Math.random() < 0.18) return passPlan;
+    return pool[weakIndex];
+  }
+
+  function chooseAiActionPlanStandard() {
+    const { attacks, moves, passPlan } = collectAiCandidatePlans('standard');
+    let bestAttack = null;
+    let bestAttackScore = -Infinity;
+    for (const a of attacks) {
+      if (a.score > bestAttackScore) {
+        bestAttackScore = a.score;
+        bestAttack = a;
+      }
+    }
+
+    let bestMove = null;
+    let bestMoveScore = -Infinity;
+    for (const m of moves) {
+      if (m.score > bestMoveScore) {
+        bestMoveScore = m.score;
+        bestMove = m;
       }
     }
 
     if (bestAttack) return bestAttack;
     if (bestMove) return bestMove;
     return passPlan;
+  }
+
+  function chooseAiActionPlanHard() {
+    const { attacks, moves, passPlan } = collectAiCandidatePlans('hard');
+    const all = [...attacks, ...moves];
+    if (!all.length) return passPlan;
+
+    all.sort((a, b) => b.score - a.score);
+    const topCount = Math.min(3, all.length);
+    return all[Math.floor(Math.random() * topCount)];
+  }
+
+  function chooseAiActionPlan() {
+    const level = normalizeAiDifficulty(state.aiDifficulty);
+    if (level === 'easy') return chooseAiActionPlanEasy();
+    if (level === 'hard') return chooseAiActionPlanHard();
+    return chooseAiActionPlanStandard();
   }
 
   function executeAiActionPlan(plan) {
@@ -4811,7 +4914,7 @@ function unitColors(side) {
         let bestScore = -Infinity;
         if (movedUnit) {
           for (const targetKey of state._attackTargets) {
-            const score = aiAttackScore(plan.destKey, targetKey, movedUnit);
+            const score = aiAttackScore(plan.destKey, targetKey, movedUnit, state.aiDifficulty);
             if (score > bestScore) {
               bestScore = score;
               bestTargetKey = targetKey;
@@ -4896,9 +4999,9 @@ function unitColors(side) {
 
     state.aiBusy = true;
     clearSelection();
-    log(`AI turn: ${state.side.toUpperCase()} is acting...`);
+    log(`AI turn: ${state.side.toUpperCase()} is acting (${aiDifficultyLabel(state.aiDifficulty)}).`);
     updateHud();
-    scheduleAiStep(AI_START_DELAY_MS);
+    scheduleAiStep(aiTimingForDifficulty(state.aiDifficulty).startMs);
   }
 
   // --- Rules helpers
@@ -6378,6 +6481,7 @@ function unitColors(side) {
       state: {
         mode: state.mode,
         gameMode: state.gameMode,
+        aiDifficulty: state.aiDifficulty,
         forwardAxis: state.forwardAxis,
         tool: state.tool,
         turn: state.turn,
@@ -6591,7 +6695,12 @@ function unitColors(side) {
 
     // Restore state fields
     const restoreMode = (payload.mode === 'play') ? 'play' : 'edit';
-    state.gameMode = (payload.gameMode === 'hvai' || payload.gameMode === 'online') ? payload.gameMode : 'hvh';
+    const restoredGameMode =
+      (payload.gameMode === 'hvh' || payload.gameMode === 'hvai' || payload.gameMode === 'online')
+        ? payload.gameMode
+        : state.gameMode;
+    state.gameMode = restoredGameMode;
+    state.aiDifficulty = normalizeAiDifficulty(payload.aiDifficulty);
     state.forwardAxis = normalizeForwardAxis(payload.forwardAxis);
     state.mode = restoreMode;
     state.tool = (payload.tool === 'terrain') ? 'terrain' : 'units';
@@ -7164,7 +7273,7 @@ function unitColors(side) {
 
       state.gameMode = nextMode;
       if (nextMode === 'hvai') {
-        log('Game mode: Human vs AI (Red AI).');
+        log(`Game mode: Human vs AI (Red AI, ${aiDifficultyLabel(state.aiDifficulty)}).`);
       } else if (nextMode === 'online') {
         stopAiLoop();
         log('Game mode: Online (Host = Blue, Guest = Red). Use Online panel to connect.');
@@ -7174,6 +7283,16 @@ function unitColors(side) {
       }
       updateHud();
       maybeStartAiTurn();
+    });
+  }
+
+  if (elAiDifficultySel) {
+    elAiDifficultySel.addEventListener('change', () => {
+      const nextDifficulty = normalizeAiDifficulty(elAiDifficultySel.value);
+      if (nextDifficulty === state.aiDifficulty) return;
+      state.aiDifficulty = nextDifficulty;
+      log(`AI difficulty: ${aiDifficultyLabel(nextDifficulty)}.`);
+      updateHud();
     });
   }
 

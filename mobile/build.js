@@ -1,1 +1,1 @@
-window.POLEMO_BUILD_ID = '20260227-130900-panel-fold-v9';
+window.POLEMO_BUILD_ID = '20260227-131900-ai-difficulty-v10';

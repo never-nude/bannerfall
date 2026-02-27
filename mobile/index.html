@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="style.css?v=20260227-panel-fold-v9" />
+  <link rel="stylesheet" href="style.css?v=20260227-ai-difficulty-v10" />
 </head>
 <body>
   <header id="hud">
@@ -36,6 +36,15 @@
             <option value="hvh">Human vs Human</option>
             <option value="hvai">Human vs AI</option>
             <option value="online">Online (Host/Guest)</option>
+          </select>
+        </div>
+
+        <div id="aiDifficultyRow" class="row">
+          <div class="label">AI</div>
+          <select id="aiDifficultySel" class="select">
+            <option value="easy">Easy</option>
+            <option value="standard">Standard</option>
+            <option value="hard">Hard</option>
           </select>
         </div>
 
@@ -273,7 +282,7 @@
   </section>
 
   <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
-  <script src="build.js?v=20260227-panel-fold-v9"></script>
-  <script src="main.js?v=20260227-panel-fold-v9"></script>
+  <script src="build.js?v=20260227-ai-difficulty-v10"></script>
+  <script src="main.js?v=20260227-ai-difficulty-v10"></script>
 </body>
 </html>
