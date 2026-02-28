@@ -74,6 +74,7 @@
   const SCENARIO_FILTER_IDS = Object.fromEntries(
     Object.entries(SCENARIO_FILTER_OPTIONS).map(([k, opts]) => [k, new Set(opts.map(o => o.id))])
   );
+  const HEX_DIRECTIONS = ['e', 'w', 'ur', 'ul', 'dr', 'dl'];
 
   // --- Core rules constants
   const ACT_LIMIT = 3; // activations per turn
@@ -84,27 +85,55 @@
   const ENABLE_CAV_ANGLE_BONUS = false;
   const CAV_FLANK_BONUS = 1;
   const CAV_REAR_BONUS = 2;
-  const AI_DIFFICULTY_IDS = new Set(['easy', 'standard', 'hard']);
-  // Different pacing/quality profiles by AI difficulty.
-  const AI_TIMING_BY_DIFFICULTY = {
-    easy: { startMs: 900, stepMs: 1280, intentMs: 560, movePauseMs: 680, combatPauseMs: 1600 },
-    standard: { startMs: 680, stepMs: 980, intentMs: 430, movePauseMs: 520, combatPauseMs: 1360 },
-    hard: { startMs: 460, stepMs: 760, intentMs: 320, movePauseMs: 420, combatPauseMs: 1180 },
+  // AI pace intentionally slowed so piece-by-piece actions are easier to follow.
+  const AI_STEP_DELAY_MS = 400; // ~60% slower than the previous 240ms pace
+  const AI_START_DELAY_MS = 300;
+  const MOVE_ANIM_STEP_MS_HUMAN = 170;
+  const MOVE_ANIM_STEP_MS_AI = 340;
+  const ACTION_PULSE_MOVE_MS = 480;
+  const ACTION_PULSE_ATTACK_MS = 560;
+  const INF_SUPPORT_MAX_RANKS = 2;
+  const INF_SUPPORT_DICE_PER_RANK = 1;
+  const AI_DIFFICULTY_PROFILES = {
+    levy: {
+      label: 'Levy',
+      attackScale: 0.82,
+      moveScale: 0.90,
+      genFocusBonus: 2,
+      attackNoise: 8,
+      moveNoise: 5,
+      passChance: 0.18,
+      attackBias: -1.0,
+      moveBias: 1.4,
+    },
+    cohort: {
+      label: 'Cohort',
+      attackScale: 1.00,
+      moveScale: 1.00,
+      genFocusBonus: 6,
+      attackNoise: 3.2,
+      moveNoise: 2.3,
+      passChance: 0.06,
+      attackBias: 0.0,
+      moveBias: 0.0,
+    },
+    legion: {
+      label: 'Legion',
+      attackScale: 1.14,
+      moveScale: 1.08,
+      genFocusBonus: 12,
+      attackNoise: 1.0,
+      moveNoise: 0.8,
+      passChance: 0.01,
+      attackBias: 1.5,
+      moveBias: -0.2,
+    },
   };
   const RANDOM_START_SCENARIO_NAME = 'Randomized Opening (Auto)';
   const RANDOM_START_UNITS_PER_SIDE = 30;
-  const SCENARIO_UNIT_CAP_PER_SIDE = 30;
   const DRAFT_BUDGET_MIN = 20;
   const DRAFT_BUDGET_MAX = 300;
   const DRAFT_BUDGET_DEFAULT = 120;
-  const DICE_SETTLE_BASE_MS = 340;
-  const DICE_SETTLE_STEP_MS = 210;
-  const DICE_SUMMARY_BASE_MS = 520;
-  const DICE_SUMMARY_STEP_MS = 210;
-  const DICE_POST_HOLD_MS = 420;
-  const MOVE_ANIM_MS_HUMAN = 220;
-  const MOVE_ANIM_MS_AI = 520;
-  const ATTACK_FLASH_MS = 920;
 
   // Dice faces: 5–6 = Hit, 4 = Retreat.
   const DIE_HIT = new Set([5, 6]);
@@ -200,28 +229,24 @@
     return FORWARD_AXIS_IDS.has(axis) ? axis : 'vertical';
   }
 
-  function normalizeAiDifficulty(level) {
-    return AI_DIFFICULTY_IDS.has(level) ? level : 'standard';
-  }
-
-  function aiDifficultyLabel(level) {
-    const id = normalizeAiDifficulty(level);
-    if (id === 'easy') return 'Easy';
-    if (id === 'hard') return 'Hard';
-    return 'Standard';
-  }
-
-  function aiTimingForDifficulty(level) {
-    const id = normalizeAiDifficulty(level);
-    return AI_TIMING_BY_DIFFICULTY[id] || AI_TIMING_BY_DIFFICULTY.standard;
-  }
-
   function forwardAxisLabel(axis) {
     const a = normalizeForwardAxis(axis);
     if (a === 'horizontal') return 'Horizontal (Blue right)';
     if (a === 'diag_tl_br') return 'Diagonal TL->BR (Blue down-right)';
     if (a === 'diag_tr_bl') return 'Diagonal TR->BL (Blue down-left)';
     return 'Vertical (Blue down)';
+  }
+
+  function normalizeAiDifficulty(level) {
+    return Object.prototype.hasOwnProperty.call(AI_DIFFICULTY_PROFILES, level) ? level : 'cohort';
+  }
+
+  function aiDifficultyProfile(level = state.aiDifficulty) {
+    return AI_DIFFICULTY_PROFILES[normalizeAiDifficulty(level)] || AI_DIFFICULTY_PROFILES.cohort;
+  }
+
+  function aiDifficultyLabel(level = state.aiDifficulty) {
+    return aiDifficultyProfile(level).label;
   }
 
   function sideForwardDirection(side, axis = state.forwardAxis) {
@@ -244,6 +269,13 @@
       case 'down': return 'up';
       default: return null;
     }
+  }
+
+  function adjacentDirection(fromKey, toKey) {
+    for (const d of HEX_DIRECTIONS) {
+      if (stepKeyInDirection(fromKey, d) === toKey) return d;
+    }
+    return null;
   }
 
   function axisLateralDirections(axis = state.forwardAxis) {
@@ -370,19 +402,10 @@
   const elHudTitle = document.getElementById('hudTitle');
   const elHudMeta = document.getElementById('hudMeta');
   const elHudLast = document.getElementById('hudLast');
-  const elRulesQuickBtn = document.getElementById('rulesQuickBtn');
-  const elRulesModal = document.getElementById('rulesModal');
-  const elRulesCloseBtn = document.getElementById('rulesCloseBtn');
-  const elRulesViewQuickBtn = document.getElementById('rulesViewQuickBtn');
-  const elRulesViewExpandedBtn = document.getElementById('rulesViewExpandedBtn');
-  const elRulesQuickView = document.getElementById('rulesQuickView');
-  const elRulesExpandedView = document.getElementById('rulesExpandedView');
-  const elStatusMeta = document.getElementById('statusMeta');
-  const elStatusLast = document.getElementById('statusLast');
 
   const elModeBtn = document.getElementById('modeBtn');
   const elGameModeSel = document.getElementById('gameModeSel');
-  const elAiDifficultyRow = document.getElementById('aiDifficultyRow');
+  const elPlayerSideSel = document.getElementById('playerSideSel');
   const elAiDifficultySel = document.getElementById('aiDifficultySel');
   const elForwardAxisSel = document.getElementById('forwardAxisSel');
   const elToolUnits = document.getElementById('toolUnits');
@@ -405,8 +428,6 @@
   const elScenarioLessonSel = document.getElementById('scenarioLessonSel');
   const elScenarioSizeSel = document.getElementById('scenarioSizeSel');
   const elScenarioTerrainSel = document.getElementById('scenarioTerrainSel');
-  const elLoadScenarioBtn = document.getElementById('loadScenarioBtn');
-  const elClearUnitsBtn = document.getElementById('clearUnitsBtn');
   const elDraftModeSel = document.getElementById('draftModeSel');
   const elDraftBudgetInput = document.getElementById('draftBudgetInput');
   const elStartDraftBtn = document.getElementById('startDraftBtn');
@@ -417,8 +438,7 @@
   const elStateFileInput = document.getElementById('stateFileInput');
   const elDiceSummary = document.getElementById('diceSummary');
   const elPhysicalDiceRow = document.getElementById('physicalDiceRow');
-  const elCornerDiceHud = document.getElementById('cornerDiceHud');
-  const elCornerDiceRow = document.getElementById('cornerDiceRow');
+  const elDiceOutcomeBrief = document.getElementById('diceOutcomeBrief');
   const elDiceTray = document.getElementById('diceTray');
   const elInspectorTitle = document.getElementById('inspectorTitle');
   const elInspectorMeta = document.getElementById('inspectorMeta');
@@ -433,21 +453,87 @@
   const elCombatSummary = document.getElementById('combatSummary');
   const elCombatMath = document.getElementById('combatMath');
   const elCombatTerrain = document.getElementById('combatTerrain');
-  const elCombatOutcome = document.getElementById('combatOutcome');
+  const elCombatSupport = document.getElementById('combatSupport');
+  const elModifierPreview = document.getElementById('modifierPreview');
+  const elVictoryTrackBody = document.getElementById('victoryTrackBody');
+  const elForceTotals = document.getElementById('forceTotals');
+  const elRulesShortBtn = document.getElementById('rulesShortBtn');
+  const elRulesFullBtn = document.getElementById('rulesFullBtn');
+  const elRulesModal = document.getElementById('rulesModal');
+  const elRulesModalTitle = document.getElementById('rulesModalTitle');
+  const elRulesModalBody = document.getElementById('rulesModalBody');
+  const elRulesCloseBtn = document.getElementById('rulesCloseBtn');
   const elCombatHint = document.getElementById('combatHint');
-  const COMBAT_RULE_HINT = 'Rules: 5-6 hit, 4 retreat, 1-3 miss. Defender in Woods gives attacker -1 die (minimum 1).';
+  const COMBAT_RULE_HINT = 'Rules: 5-6 hit, 4 retreat, 1-3 miss. Defender in Woods gives attacker -1 die (minimum 1). Archers in Woods can fire only from tree-line woods (woods hex adjacent to clear). Reinforcement: two adjacent friendly INF touching the defender brace opposite attack sides for -1 die (one line deep only).';
+  const RULES_SHORT_HTML = `
+    <h4>Core</h4>
+    <p>3 activations per turn. Most units act once per turn. A unit occupies one hex; no stacking.</p>
+    <h4>Command</h4>
+    <p>General command radius: Green 3, Regular 4, Veteran 5. Runner relay radius: 1.</p>
+    <p>Out of command: Green INF/ARC/SKR cannot activate. Regular INF/ARC/SKR can attack but cannot move. Veterans and CAV ignore command limits.</p>
+    <h4>Combat</h4>
+    <p>d6: 5-6 hit, 4 retreat, 1-3 miss. Defender in Woods gives attacker -1 die (minimum 1).</p>
+    <p>Tree-line rule: Archers in Woods can fire only if that woods hex is adjacent to at least one Clear hex.</p>
+    <p>Infantry reinforcement: defender needs two adjacent friendly INF touching it. Attacks from the opposite two hex sides get -1 attacker die. One line deep only.</p>
+    <h4>Victory</h4>
+    <p>Clear Victory: capture at least half of opponent starting UP. Decapitation: eliminate all enemy generals. Annihilation: eliminate all enemy units.</p>
+  `;
+  const RULES_FULL_HTML = `
+    <h4>Bannerfall At A Glance</h4>
+    <p>Bannerfall is a hex-grid tactics game about cohesion, command, and collapse. The central idea is simple: an army wins by staying coordinated while forcing the enemy to lose shape. Units are formations, not heroes. Position and command matter more than flashy abilities.</p>
+    <h4>How A Battle Starts</h4>
+    <p>In local play, Blue always acts first. In online multiplayer, once both players connect and the battle begins, the starting side is randomized between Blue and Red.</p>
+    <p>Every turn has up to 3 activations. Most units can act once each turn. You can end your turn early, but if you spend all 3 activations, the turn ends automatically.</p>
+    <h4>Unit Types, Movement, And Role</h4>
+    <p>Base movement: INF 1, ARC 1, CAV 2, SKR 2, GEN 2, RUN 3/4/5 by quality, MED 1. Veterans, skirmishers, and runners can withdraw 1 hex from engagement if the destination is safe.</p>
+    <ul>
+      <li>INF: line holder, 2 melee dice.</li>
+      <li>CAV: shock unit, 3 melee dice.</li>
+      <li>SKR: flexible screen, 2 melee dice, 1 ranged die at range 2.</li>
+      <li>ARC: ranged pressure, 1 melee die, 2 ranged dice at range 2 and 1 die at range 3.</li>
+      <li>GEN: command anchor, 1 melee die.</li>
+      <li>RUN: messenger/relay, no attack, command relay radius 1.</li>
+      <li>MED: healer, no attack, restores +1 HP to one adjacent friendly unit as its action.</li>
+    </ul>
+    <h4>HP, UP, And Why They Matter</h4>
+    <p>HP is durability. A unit at 0 HP is destroyed. UP is strategic value used for force totals and Clear Victory scoring. Experience (Green/Regular/Veteran) mainly changes HP/UP and command independence, not your basic hit table.</p>
+    <p>Reference values:</p>
+    <ul>
+      <li>INF HP 3/4/5, UP 3/5/7</li>
+      <li>CAV HP 2/3/4, UP 6/8/10</li>
+      <li>SKR HP 1/2/3, UP 2/3/4</li>
+      <li>ARC HP 1/2/3, UP 2/4/6</li>
+      <li>GEN HP 2/3/4, UP 8/10/12</li>
+      <li>RUN HP 2/2/2, UP 1/2/3</li>
+      <li>MED HP 1/1/1, UP 4</li>
+    </ul>
+    <h4>Terrain And Friction</h4>
+    <p>Terrain defines lanes and tempo. Clear costs 1 move for all units. Hills/Woods/Rough cost 2 for INF/ARC/SKR/GEN and 3 for CAV. Water is impassable.</p>
+    <p>Woods also provide defense: attacker rolls -1 die (minimum 1). Archers standing in Woods can only fire if their woods hex is adjacent to at least one Clear hex (tree-line fire rule).</p>
+    <h4>Command System</h4>
+    <p>Most units need command coverage to function fully. General radius: Green 3, Regular 4, Veteran 5. Runner relay radius: 1.</p>
+    <ul>
+      <li>Green INF/ARC/SKR out of command: cannot activate.</li>
+      <li>Regular INF/ARC/SKR out of command: can attack but cannot move.</li>
+      <li>CAV and all Veteran units ignore command restrictions.</li>
+    </ul>
+    <h4>Combat Resolution</h4>
+    <p>Each die is read as: 5-6 hit, 4 retreat, 1-3 miss. Hits remove 1 HP each. Retreats push the defender away from the attacker. If a retreat is blocked by map edge, water, terrain legality, or occupation, that retreat converts into an additional hit.</p>
+    <p>This makes combat about geometry as much as damage: displacement can open gaps, break fronts, and trigger collapse.</p>
+    <h4>Infantry Reinforcement Rule</h4>
+    <p>An infantry defender is reinforced only when it has a touching adjacent pair of friendly infantry. If the attack comes from the opposite brace directions, attacker dice are reduced by 1 (minimum 1 die). Reinforcement is one line deep only.</p>
+    <p>UI cue: light cyan marks reinforced units; darker cyan marks the units providing the brace.</p>
+    <h4>Line Advance</h4>
+    <p>Line Advance is an infantry-only formation action. It spends 1 activation and attempts to move a contiguous eligible infantry line one step forward. It does not include attacks. Some units may move while blocked units remain in place.</p>
+    <h4>Victory Conditions</h4>
+    <ul>
+      <li>Clear Victory: capture at least half of the opponent's starting UP.</li>
+      <li>Decapitation: eliminate all enemy generals.</li>
+      <li>Annihilation: eliminate all enemy units.</li>
+    </ul>
+    <p>Once battle starts, the selected victory condition is locked until you return to Setup.</p>
+  `;
   let diceRenderNonce = 0;
-  const RULES_VIEW_PREF_KEY = 'bannerfall-rules-view-v1';
-  const PANEL_COLLAPSE_PREF_KEY = 'bannerfall-panel-collapse-v1';
-  const PANEL_COLLAPSE_DEFAULTS_TOUCH = {
-    turnOrdersPanel: false,
-    statusPanel: false,
-    onlinePanel: true,
-    setupPanel: true,
-    dicePanel: true,
-    selectedUnitPanel: true,
-    editorPanel: true,
-  };
 
   const elVictorySel = document.getElementById('victorySel');
   const elEndTurnBtn = document.getElementById('endTurnBtn');
@@ -473,7 +559,8 @@
 
     // Play
     gameMode: 'hvai', // 'hvh' | 'hvai' | 'online'
-    aiDifficulty: 'standard', // 'easy' | 'standard' | 'hard'
+    humanSide: 'blue', // local player side in Human vs AI
+    aiDifficulty: 'cohort', // 'levy' | 'cohort' | 'legion'
     forwardAxis: 'vertical', // 'vertical' | 'horizontal' | 'diag_tl_br' | 'diag_tr_bl'
     turn: 1,
     side: 'blue',
@@ -503,14 +590,11 @@
     lastImport: null, // { source, at }
     aiBusy: false,
     aiTimer: null,
-    aiQueuedFollowup: null,
-    combatBusy: false,
-    combatBusyUntil: 0,
-    moveAnim: null,
-    moveAnimUntil: 0,
-    attackFlash: null,
-    animFrame: null,
     lastCombat: null,
+    moveAnim: null,
+    moveAnimRaf: null,
+    actionPulse: null,
+    actionPulseRaf: null,
 
     draft: {
       active: false,
@@ -539,6 +623,22 @@
   const ONLINE_CODE_ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
   const ONLINE_CODE_LENGTH = 4;
   const ONLINE_PEER_PREFIX = 'cyb-';
+
+  function normalizeSide(side) {
+    return side === 'red' ? 'red' : 'blue';
+  }
+
+  function opposingSide(side) {
+    return normalizeSide(side) === 'blue' ? 'red' : 'blue';
+  }
+
+  function aiSide() {
+    return opposingSide(state.humanSide);
+  }
+
+  function randomStartSide() {
+    return Math.random() < 0.5 ? 'blue' : 'red';
+  }
 
   // --- Board model
   function key(q, r) { return `${q},${r}`; }
@@ -3020,19 +3120,13 @@
     const rows = (board.maxR - board.minR + 1);
     const availW = rect.width;
     const availH = rect.height;
-    const smallViewport = window.matchMedia('(max-width: 980px)').matches;
-    const boardPad = smallViewport ? 10 : 12;
-    const fitW = Math.max(1, availW - (boardPad * 2));
-    const fitH = Math.max(1, availH - (boardPad * 2));
 
     // For pointy-top hexes with odd-r offset:
     // width ≈ sqrt(3)*R*(cols + 0.5)
     // height ≈ R*((rows-1)*1.5 + 2)
-    const rByW = fitW / (Math.sqrt(3) * (cols + 0.5));
-    const rByH = fitH / (((rows - 1) * 1.5) + 2);
-    const minRadius = smallViewport ? 6 : 18;
-    const maxRadius = smallViewport ? 34 : 42;
-    R = Math.max(minRadius, Math.min(maxRadius, Math.floor(Math.min(rByW, rByH))));
+    const rByW = availW / (Math.sqrt(3) * (cols + 0.5));
+    const rByH = availH / (((rows - 1) * 1.5) + 2);
+    R = Math.max(18, Math.min(42, Math.floor(Math.min(rByW, rByH))));
 
     HEX_W = Math.sqrt(3) * R;
     HEX_H = 2 * R;
@@ -3041,8 +3135,8 @@
     const boardW = HEX_W * (cols + 0.5);
     const boardH = R * (((rows - 1) * 1.5) + 2);
 
-    ORIGIN_X = boardPad + ((fitW - boardW) / 2) + HEX_W / 2;
-    ORIGIN_Y = boardPad + ((fitH - boardH) / 2) + R;
+    ORIGIN_X = (availW - boardW) / 2 + HEX_W / 2;
+    ORIGIN_Y = (availH - boardH) / 2 + R;
 
     for (const h of board.active) {
       const x = ORIGIN_X + (h.q - board.minQ) * HEX_W + ((h.r & 1) ? (HEX_W / 2) : 0);
@@ -3255,70 +3349,83 @@ function unitColors(side) {
     }
   }
 
-  function ensureVisualAnimationLoop() {
-    if (state.animFrame) return;
-    state.animFrame = requestAnimationFrame(function tick() {
-      state.animFrame = null;
-      const now = Date.now();
-      const moveActive = !!(state.moveAnim && now < state.moveAnim.endAt);
-      const flashActive = !!(state.attackFlash && now < state.attackFlash.endAt);
-      draw();
-      if (moveActive || flashActive) ensureVisualAnimationLoop();
-    });
+  function stopMoveAnimation() {
+    if (state.moveAnimRaf) {
+      cancelAnimationFrame(state.moveAnimRaf);
+      state.moveAnimRaf = null;
+    }
+    state.moveAnim = null;
   }
 
-  function startMoveAnimation(fromKey, toKey, unit) {
-    if (!unit || !fromKey || !toKey || fromKey === toKey) return;
-    if (!board.activeSet.has(fromKey) || !board.activeSet.has(toKey)) return;
+  function stopActionPulse() {
+    if (state.actionPulseRaf) {
+      cancelAnimationFrame(state.actionPulseRaf);
+      state.actionPulseRaf = null;
+    }
+    state.actionPulse = null;
+  }
 
-    const aiSideMove = isAiTurnActive() && unit.side === state.side;
-    const durationMs = aiSideMove ? MOVE_ANIM_MS_AI : MOVE_ANIM_MS_HUMAN;
-    const now = Date.now();
-    state.moveAnim = {
-      unitId: unit.id,
+  function startActionPulse({ type = 'attack', fromKey = null, toKey = null, durationMs = 500 } = {}) {
+    if (!fromKey && !toKey) return;
+
+    stopActionPulse();
+
+    const now = performance.now();
+    state.actionPulse = {
+      type,
       fromKey,
       toKey,
-      startAt: now,
-      endAt: now + durationMs,
-      unit: {
-        side: unit.side,
-        type: unit.type,
-        quality: unit.quality,
-        hp: unit.hp,
-      },
+      startedAt: now,
+      durationMs: Math.max(120, Number(durationMs) || 500),
     };
-    state.moveAnimUntil = state.moveAnim.endAt;
-    ensureVisualAnimationLoop();
+
+    const tick = (ts) => {
+      const pulse = state.actionPulse;
+      if (!pulse) {
+        state.actionPulseRaf = null;
+        return;
+      }
+      const t = (ts - pulse.startedAt) / pulse.durationMs;
+      if (t >= 1) {
+        state.actionPulse = null;
+        state.actionPulseRaf = null;
+        draw();
+        return;
+      }
+      draw();
+      state.actionPulseRaf = requestAnimationFrame(tick);
+    };
+
+    draw();
+    state.actionPulseRaf = requestAnimationFrame(tick);
   }
 
-  function setAttackFlash(hexKey, durationMs = ATTACK_FLASH_MS) {
-    if (!hexKey || !board.activeSet.has(hexKey)) return;
-    const now = Date.now();
-    state.attackFlash = {
-      hexKey,
-      startAt: now,
-      endAt: now + Math.max(120, durationMs),
+  function moveAnimationPosition(anim) {
+    if (!anim || !Array.isArray(anim.pathKeys) || anim.pathKeys.length < 2) return null;
+    const totalSegments = anim.pathKeys.length - 1;
+    const clamped = Math.max(0, Math.min(1, Number(anim.t || 0)));
+    const segmentProgress = clamped * totalSegments;
+    const segIndex = Math.min(totalSegments - 1, Math.floor(segmentProgress));
+    const localT = segmentProgress - segIndex;
+
+    const fromHex = board.byKey.get(anim.pathKeys[segIndex]);
+    const toHex = board.byKey.get(anim.pathKeys[segIndex + 1]);
+    if (!fromHex || !toHex) return null;
+
+    return {
+      cx: fromHex.cx + ((toHex.cx - fromHex.cx) * localT),
+      cy: fromHex.cy + ((toHex.cy - fromHex.cy) * localT),
     };
-    ensureVisualAnimationLoop();
   }
 
-  function drawAnimatedUnitToken(anim, nowMs) {
-    if (!anim) return;
-    const hFrom = board.byKey.get(anim.fromKey);
-    const hTo = board.byKey.get(anim.toKey);
-    if (!hFrom || !hTo || !anim.unit) return;
+  function drawTokenAt(unit, cx, cy) {
+    if (!unit) return;
+    const c = unitColors(unit.side);
+    const def = UNIT_BY_ID.get(unit.type);
+    if (!def) return;
 
-    const span = Math.max(1, anim.endAt - anim.startAt);
-    const tRaw = (nowMs - anim.startAt) / span;
-    const t = Math.max(0, Math.min(1, tRaw));
-    const ease = t < 0.5 ? (2 * t * t) : (1 - (Math.pow(-2 * t + 2, 2) / 2));
-    const cx = hFrom.cx + ((hTo.cx - hFrom.cx) * ease);
-    const cy = hFrom.cy + ((hTo.cy - hFrom.cy) * ease);
-    const u = anim.unit;
-
-    const c = unitColors(u.side);
     ctx.save();
-    ctx.globalAlpha = 0.98;
+    ctx.globalAlpha = 0.96;
 
     ctx.beginPath();
     ctx.arc(cx, cy, R * 0.55, 0, Math.PI * 2);
@@ -3326,19 +3433,17 @@ function unitColors(side) {
     ctx.fill();
 
     ctx.lineWidth = Math.max(2, Math.floor(R * 0.12));
-    ctx.strokeStyle = qualityStroke(u.quality);
+    ctx.strokeStyle = qualityStroke(unit.quality);
     ctx.stroke();
 
-    const def = UNIT_BY_ID.get(u.type);
-    const canIcon = (u.type !== 'gen') && unitIconReady && unitIconReady(u.type);
-    if (u.type === 'run') {
+    if (unit.type === 'run') {
       drawRunnerFootGlyph(cx, cy, R * 0.82);
-    } else if (canIcon) {
-      const img = UNIT_ICONS && UNIT_ICONS[u.type];
-      if (img) {
-        const base = R * 0.95;
-        const tune = (UNIT_ICON_TUNE && UNIT_ICON_TUNE[u.type]) ? UNIT_ICON_TUNE[u.type] : { scale: 0.95, y: 0 };
-        const s = Math.floor(base * (tune.scale || 0.95));
+    } else {
+      const img = UNIT_ICONS && UNIT_ICONS[unit.type];
+      const canIcon = (unit.type !== 'gen') && unitIconReady && unitIconReady(unit.type);
+      if (canIcon) {
+        const tune = (UNIT_ICON_TUNE && UNIT_ICON_TUNE[unit.type]) ? UNIT_ICON_TUNE[unit.type] : { scale: 0.95, y: 0 };
+        const s = Math.floor((R * 0.95) * (tune.scale || 0.95));
         const yOff = Math.floor(R * (tune.y || 0));
         const rot = (typeof tune.rot === 'number') ? tune.rot : 0;
         if (rot) {
@@ -3350,41 +3455,117 @@ function unitColors(side) {
         } else {
           ctx.drawImage(img, Math.floor(cx - s / 2), Math.floor(cy - s / 2 + yOff), s, s);
         }
+      } else {
+        const textScale = (unit.type === 'inf' || unit.type === 'cav' || unit.type === 'skr') ? 0.83 : 1.0;
+        const fontPx = Math.floor(R * 0.55 * textScale);
+        ctx.font = `700 ${fontPx}px system-ui, -apple-system, Segoe UI, Roboto, sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = c.text;
+        ctx.fillText(def.symbol, cx, cy + 1);
       }
-    } else {
-      const textScale = (u.type === 'inf' || u.type === 'cav' || u.type === 'skr') ? 0.83 : 1.0;
-      const fontPx = Math.floor(R * 0.55 * textScale);
-      ctx.font = `700 ${fontPx}px system-ui, -apple-system, Segoe UI, Roboto, sans-serif`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillStyle = c.text;
-      ctx.fillText(def ? def.symbol : '?', cx, cy + 1);
     }
 
-    const maxHp = unitMaxHp(u.type, u.quality);
+    const maxHp = unitMaxHp(unit.type, unit.quality);
     const pipR = Math.max(2, Math.floor(R * 0.07));
     const startX = cx - (pipR * 2) * (maxHp - 1) * 0.5;
     const y = cy + R * 0.78;
     for (let i = 0; i < maxHp; i++) {
       ctx.beginPath();
       ctx.arc(startX + i * (pipR * 2), y, pipR, 0, Math.PI * 2);
-      ctx.fillStyle = (i < u.hp) ? '#fff' : '#ffffff33';
+      ctx.fillStyle = (i < unit.hp) ? '#fff' : '#ffffff33';
       ctx.fill();
     }
 
     ctx.restore();
   }
 
-  function draw() {
-    const nowMs = Date.now();
-    if (state.moveAnim && nowMs >= state.moveAnim.endAt) {
-      state.moveAnim = null;
-      state.moveAnimUntil = 0;
-    }
-    if (state.attackFlash && nowMs >= state.attackFlash.endAt) {
-      state.attackFlash = null;
+  function drawActionPulseOverlay(pulse) {
+    if (!pulse) return;
+
+    const fromHex = pulse.fromKey ? board.byKey.get(pulse.fromKey) : null;
+    const toHex = pulse.toKey ? board.byKey.get(pulse.toKey) : null;
+    if (!fromHex && !toHex) return;
+
+    const now = performance.now();
+    const duration = Math.max(1, Number(pulse.durationMs) || 500);
+    const t = Math.max(0, Math.min(1, (now - pulse.startedAt) / duration));
+    const fade = 1 - t;
+
+    function glowHex(hex, intensity = 1) {
+      if (!hex) return;
+      const glow = (0.16 + (0.20 * fade)) * intensity;
+      const ring = (0.36 + (0.38 * fade)) * intensity;
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(hex.cx, hex.cy, R * 0.64, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(255, 76, 76, ${Math.max(0.08, glow)})`;
+      ctx.fill();
+      ctx.lineWidth = Math.max(2, R * 0.11);
+      ctx.strokeStyle = `rgba(255, 134, 134, ${Math.max(0.15, ring)})`;
+      ctx.shadowBlur = Math.max(8, Math.floor(R * 0.75));
+      ctx.shadowColor = `rgba(255, 70, 70, ${Math.max(0.18, 0.42 * fade)})`;
+      ctx.stroke();
+      ctx.restore();
     }
 
+    glowHex(fromHex, 1.0);
+    if (!fromHex || !toHex || fromHex.k !== toHex.k) glowHex(toHex, 0.95);
+
+    if (fromHex && toHex && fromHex.k !== toHex.k) {
+      const dx = toHex.cx - fromHex.cx;
+      const dy = toHex.cy - fromHex.cy;
+      const len = Math.hypot(dx, dy);
+      if (len > 1) {
+        const ux = dx / len;
+        const uy = dy / len;
+        const pad = R * 0.64;
+        const sx = fromHex.cx + (ux * pad);
+        const sy = fromHex.cy + (uy * pad);
+        const ex = toHex.cx - (ux * pad);
+        const ey = toHex.cy - (uy * pad);
+
+        ctx.save();
+        ctx.lineCap = 'round';
+        ctx.lineWidth = Math.max(3, R * 0.17);
+        ctx.strokeStyle = `rgba(255, 98, 98, ${0.30 + (0.50 * fade)})`;
+        ctx.shadowBlur = Math.max(8, Math.floor(R * 0.65));
+        ctx.shadowColor = `rgba(255, 70, 70, ${0.30 + (0.35 * fade)})`;
+        ctx.beginPath();
+        ctx.moveTo(sx, sy);
+        ctx.lineTo(ex, ey);
+        ctx.stroke();
+
+        const ah = Math.max(8, R * 0.34);
+        const aw = Math.max(5, R * 0.20);
+        const px = -uy;
+        const py = ux;
+        ctx.fillStyle = `rgba(255, 124, 124, ${0.32 + (0.48 * fade)})`;
+        ctx.beginPath();
+        ctx.moveTo(ex, ey);
+        ctx.lineTo(ex - (ux * ah) + (px * aw), ey - (uy * ah) + (py * aw));
+        ctx.lineTo(ex - (ux * ah) - (px * aw), ey - (uy * ah) - (py * aw));
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+      }
+    }
+  }
+
+  function draw() {
+    const activeMoveAnim = state.moveAnim;
+    const reinforceAnchorKey = (() => {
+      if (state.mode !== 'play') return null;
+      if (state.selectedKey && unitsByHex.get(state.selectedKey)?.type === 'inf') return state.selectedKey;
+      if (!state.selectedKey && state._hoverKey && unitsByHex.get(state._hoverKey)?.type === 'inf') return state._hoverKey;
+      return null;
+    })();
+    const reinforcePreview = (
+      state.mode === 'play' &&
+      reinforceAnchorKey
+    ) ? reinforcementPreviewForAnchor(reinforceAnchorKey) : null;
+    const reinforcedFrontKeys = (reinforcePreview && reinforcePreview.active) ? reinforcePreview.frontSet : null;
+    const reinforcingBackKeys = (reinforcePreview && reinforcePreview.active) ? reinforcePreview.supportSet : null;
     ctx.clearRect(0, 0, elCanvas.width, elCanvas.height);
 
     // Background
@@ -3412,15 +3593,11 @@ function unitColors(side) {
       const k = h.k;
       if (state.mode === 'play' && state.selectedKey) {
         if (state._moveTargets?.has(k)) {
-          ctx.save();
-          ctx.strokeStyle = '#5db8ff';
-          ctx.lineWidth = Math.max(4, Math.round(R * 0.18));
-          ctx.shadowColor = 'rgba(93, 184, 255, 0.42)';
-          ctx.shadowBlur = Math.max(4, Math.round(R * 0.35));
+          ctx.strokeStyle = '#4aa3ff';
+          ctx.lineWidth = 3;
           ctx.setLineDash([6, 6]);
           ctx.stroke(p);
           ctx.setLineDash([]);
-          ctx.restore();
         }
         if (state._attackTargets?.has(k)) {
           ctx.strokeStyle = '#ff5050';
@@ -3438,19 +3615,15 @@ function unitColors(side) {
         }
       }
 
-      if (state.attackFlash && state.attackFlash.hexKey === k) {
-        const span = Math.max(1, state.attackFlash.endAt - state.attackFlash.startAt);
-        const phase = Math.max(0, Math.min(1, (nowMs - state.attackFlash.startAt) / span));
-        const pulse = 0.55 + (Math.sin((phase * Math.PI * 4)) * 0.25);
-        ctx.save();
-        ctx.fillStyle = `rgba(255, 60, 60, ${0.15 + (pulse * 0.15)})`;
+      // Reinforcement visibility:
+      // - light cyan = reinforced front
+      // - darker cyan = reinforcing rear
+      if (reinforcingBackKeys && reinforcingBackKeys.has(k)) {
+        ctx.fillStyle = 'rgba(0, 170, 170, 0.36)';
         ctx.fill(p);
-        ctx.strokeStyle = `rgba(255, 88, 88, ${0.70 + (pulse * 0.25)})`;
-        ctx.lineWidth = Math.max(4, Math.round(R * 0.22));
-        ctx.shadowColor = 'rgba(255, 70, 70, 0.7)';
-        ctx.shadowBlur = Math.max(8, Math.round(R * 0.55));
-        ctx.stroke(p);
-        ctx.restore();
+      } else if (reinforcedFrontKeys && reinforcedFrontKeys.has(k)) {
+        ctx.fillStyle = 'rgba(0, 226, 214, 0.20)';
+        ctx.fill(p);
       }
 
       // Hover
@@ -3490,7 +3663,7 @@ function unitColors(side) {
     // Units
     for (const [hk, u] of unitsByHex) {
       if (!isUnitVisibleForCurrentView(u)) continue;
-      if (state.moveAnim && state.moveAnim.unitId === u.id && state.moveAnim.toKey === hk) continue;
+      if (activeMoveAnim && u.id === activeMoveAnim.unitId && hk === activeMoveAnim.toKey) continue;
       const h = board.byKey.get(hk);
       if (!h) continue;
 
@@ -3591,9 +3764,16 @@ function unitColors(side) {
       }
     }
 
-    if (state.moveAnim) {
-      drawAnimatedUnitToken(state.moveAnim, nowMs);
+    if (activeMoveAnim && activeMoveAnim.unit) {
+      const p = moveAnimationPosition(activeMoveAnim);
+      if (p) drawTokenAt(activeMoveAnim.unit, p.cx, p.cy);
     }
+
+    if (state.actionPulse) {
+      drawActionPulseOverlay(state.actionPulse);
+    }
+
+    renderModifierPreview();
   }
 
   // --- UI helpers
@@ -3629,153 +3809,17 @@ function unitColors(side) {
     el.textContent = String(value);
   }
 
-  function loadRulesViewMode() {
-    try {
-      const raw = localStorage.getItem(RULES_VIEW_PREF_KEY);
-      if (raw === 'expanded') return 'expanded';
-    } catch (_) {}
-    return 'quick';
-  }
-
-  function saveRulesViewMode(mode) {
-    try {
-      localStorage.setItem(RULES_VIEW_PREF_KEY, mode === 'expanded' ? 'expanded' : 'quick');
-    } catch (_) {}
-  }
-
-  function setRulesViewMode(mode, savePref = true) {
-    const nextMode = (mode === 'expanded') ? 'expanded' : 'quick';
-    const quick = nextMode === 'quick';
-
-    if (elRulesQuickView) {
-      elRulesQuickView.hidden = !quick;
-      elRulesQuickView.style.display = quick ? 'grid' : 'none';
-      elRulesQuickView.setAttribute('aria-hidden', quick ? 'false' : 'true');
-    }
-    if (elRulesExpandedView) {
-      elRulesExpandedView.hidden = quick;
-      elRulesExpandedView.style.display = quick ? 'none' : 'grid';
-      elRulesExpandedView.setAttribute('aria-hidden', quick ? 'true' : 'false');
-    }
-
-    if (elRulesViewQuickBtn) {
-      elRulesViewQuickBtn.classList.toggle('active', quick);
-      elRulesViewQuickBtn.setAttribute('aria-selected', quick ? 'true' : 'false');
-    }
-    if (elRulesViewExpandedBtn) {
-      elRulesViewExpandedBtn.classList.toggle('active', !quick);
-      elRulesViewExpandedBtn.setAttribute('aria-selected', quick ? 'false' : 'true');
-    }
-
-    if (savePref) saveRulesViewMode(nextMode);
-  }
-
-  function isRulesModalOpen() {
-    return !!(elRulesModal && !elRulesModal.hidden);
-  }
-
-  function setRulesModalOpen(open) {
-    if (!elRulesModal) return;
-    const isOpen = !!open;
-    elRulesModal.hidden = !isOpen;
-    elRulesModal.setAttribute('aria-hidden', isOpen ? 'false' : 'true');
-    document.body.classList.toggle('rules-open', isOpen);
-    if (elRulesQuickBtn) elRulesQuickBtn.setAttribute('aria-expanded', String(isOpen));
-  }
-
-  function loadPanelCollapsePrefs() {
-    try {
-      const raw = localStorage.getItem(PANEL_COLLAPSE_PREF_KEY);
-      if (!raw) return {};
-      const parsed = JSON.parse(raw);
-      if (!parsed || typeof parsed !== 'object') return {};
-      return parsed;
-    } catch (_) {
-      return {};
-    }
-  }
-
-  function savePanelCollapsePrefs(prefs) {
-    try {
-      localStorage.setItem(PANEL_COLLAPSE_PREF_KEY, JSON.stringify(prefs || {}));
-    } catch (_) {}
-  }
-
-  function applyPanelCollapsedState(panel, collapsed) {
-    if (!panel) return;
-    const isCollapsed = !!collapsed;
-    panel.classList.toggle('panel-collapsed', isCollapsed);
-    const btn = panel.querySelector(':scope > .panelTitle > .panelToggleBtn');
-    if (btn) {
-      btn.textContent = isCollapsed ? 'Show' : 'Hide';
-      btn.setAttribute('aria-expanded', String(!isCollapsed));
-      btn.setAttribute('aria-label', `${isCollapsed ? 'Show' : 'Hide'} ${panel.id || 'panel'}`);
-    }
-  }
-
-  function defaultPanelCollapsedOnTouch(panelId) {
-    return !!PANEL_COLLAPSE_DEFAULTS_TOUCH[panelId];
-  }
-
-  function initPanelCollapseControls() {
-    const panels = [...document.querySelectorAll('#side > .panel')];
-    if (!panels.length) return;
-
-    const prefs = loadPanelCollapsePrefs();
-    const coarsePointer = window.matchMedia('(hover: none) and (pointer: coarse)').matches;
-    let prefsChanged = false;
-
-    for (let i = 0; i < panels.length; i++) {
-      const panel = panels[i];
-      const title = panel.querySelector(':scope > .panelTitle');
-      if (!title) continue;
-
-      if (!panel.id) panel.id = `panel${i + 1}`;
-      const panelId = panel.id;
-
-      let toggleBtn = title.querySelector('.panelToggleBtn');
-      if (!toggleBtn) {
-        toggleBtn = document.createElement('button');
-        toggleBtn.type = 'button';
-        toggleBtn.className = 'panelToggleBtn';
-        title.appendChild(toggleBtn);
-      }
-
-      toggleBtn.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        const nextCollapsed = !panel.classList.contains('panel-collapsed');
-        applyPanelCollapsedState(panel, nextCollapsed);
-        prefs[panelId] = nextCollapsed;
-        savePanelCollapsePrefs(prefs);
-      });
-
-      let collapsed = false;
-      if (Object.prototype.hasOwnProperty.call(prefs, panelId)) {
-        collapsed = !!prefs[panelId];
-      } else if (coarsePointer) {
-        collapsed = defaultPanelCollapsedOnTouch(panelId);
-        prefs[panelId] = collapsed;
-        prefsChanged = true;
-      }
-
-      applyPanelCollapsedState(panel, collapsed);
-    }
-
-    if (prefsChanged) savePanelCollapsePrefs(prefs);
-  }
-
-  function resetInspector(message = 'Select a friendly unit in Play mode.') {
+  function resetInspector(message = '') {
     setInspectorValue(elInspectorTitle, 'No unit selected.');
     setInspectorValue(elInspectorMeta, message);
     setInspectorValue(elInspectorSide, '-');
     setInspectorValue(elInspectorType, '-');
     setInspectorValue(elInspectorQuality, '-');
-    setInspectorValue(elInspectorHex, '-');
+    setInspectorValue(elInspectorHex, '');
     setInspectorValue(elInspectorHp, '-');
     setInspectorValue(elInspectorUp, '-');
-    setInspectorValue(elInspectorCommand, '-');
-    setInspectorValue(elInspectorRadius, '-');
+    setInspectorValue(elInspectorCommand, '');
+    setInspectorValue(elInspectorRadius, '');
   }
 
   function updateInspector() {
@@ -3797,31 +3841,16 @@ function unitColors(side) {
     const qualityText = humanizeQuality(u.quality);
     const maxHp = unitMaxHp(u.type, u.quality);
     const up = unitUpValue(u.type, u.quality);
-    const inCmd = inCommandAt(selectedKey, u.side);
-
-    let commandText = inCmd ? 'IN' : 'OUT';
-    if (u.type === 'gen') commandText = 'IN (command source)';
-    else if (u.type === 'run') commandText = 'IN (relay source)';
-    else if (unitIgnoresCommand(u)) commandText += ' (independent)';
-
-    let radiusText = '-';
-    if (u.type === 'gen') radiusText = String(generalCommandRadius(u));
-    else if (u.type === 'run') radiusText = String(RUNNER_COMMAND_RADIUS);
-    const activationState = state.actedUnitIds.has(u.id) ? 'spent this turn' : 'ready';
-    const metaText = (state.mode === 'play')
-      ? `Play mode: ${activationState}.`
-      : 'Edit mode preview values.';
-
     setInspectorValue(elInspectorTitle, `${u.side.toUpperCase()} ${def.abbrev} (${qualityText})`);
-    setInspectorValue(elInspectorMeta, metaText);
+    setInspectorValue(elInspectorMeta, '');
     setInspectorValue(elInspectorSide, u.side.toUpperCase());
     setInspectorValue(elInspectorType, def.label);
     setInspectorValue(elInspectorQuality, qualityText);
-    setInspectorValue(elInspectorHex, selectedKey);
+    setInspectorValue(elInspectorHex, '');
     setInspectorValue(elInspectorHp, `${u.hp}/${maxHp}`);
     setInspectorValue(elInspectorUp, up);
-    setInspectorValue(elInspectorCommand, commandText);
-    setInspectorValue(elInspectorRadius, radiusText);
+    setInspectorValue(elInspectorCommand, '');
+    setInspectorValue(elInspectorRadius, '');
   }
 
   function diePipIndexes(value) {
@@ -3896,33 +3925,12 @@ function unitColors(side) {
     }
   }
 
-  function renderIdleCornerDice() {
-    if (!elCornerDiceRow) return;
-    elCornerDiceRow.innerHTML = '';
-    const sample = [1, 3, 5];
-    for (const v of sample) {
-      const { shell } = makePhysicalDieShell(v, 'miss', `Sample d6 ${v}`);
-      shell.className = 'physicalDie miss cornerDie';
-      shell.style.setProperty('--dice-rot', `${(v - 2) * 2}deg`);
-      elCornerDiceRow.appendChild(shell);
-    }
-    if (elCornerDiceHud) elCornerDiceHud.classList.add('has-roll');
-  }
-
-  function diceAnimationDurationMs(rollCount) {
-    const count = Math.max(1, Math.trunc(Number(rollCount) || 1));
-    return DICE_SUMMARY_BASE_MS + ((count - 1) * DICE_SUMMARY_STEP_MS) + DICE_POST_HOLD_MS;
-  }
-
   function clearDiceDisplay() {
     diceRenderNonce += 1;
     if (elDiceSummary) elDiceSummary.textContent = 'No rolls yet.';
+    if (elDiceOutcomeBrief) elDiceOutcomeBrief.textContent = 'This roll: -';
     if (elDiceTray) elDiceTray.innerHTML = '';
     renderIdlePhysicalDice();
-    renderIdleCornerDice();
-    state.combatBusy = false;
-    state.combatBusyUntil = 0;
-    if (elCornerDiceHud) elCornerDiceHud.classList.remove('combat-active');
     clearCombatBreakdown();
   }
 
@@ -3930,17 +3938,105 @@ function unitColors(side) {
     return TERRAIN_LABEL_BY_ID.get(terrainId) || 'Unknown';
   }
 
+  function renderModifierPreview() {
+    if (!elModifierPreview) return;
+    if (state.mode !== 'play') {
+      elModifierPreview.textContent = 'Modifier preview: start battle and hover/select a unit.';
+      return;
+    }
+
+    const previewKey = (() => {
+      if (state.selectedKey && unitsByHex.has(state.selectedKey)) return state.selectedKey;
+      if (state._hoverKey && unitsByHex.has(state._hoverKey)) return state._hoverKey;
+      return null;
+    })();
+
+    if (!previewKey) {
+      elModifierPreview.textContent = 'Modifier preview: hover or select a unit.';
+      return;
+    }
+
+    const u = unitsByHex.get(previewKey);
+    const h = board.byKey.get(previewKey);
+    if (!u || !h) {
+      elModifierPreview.textContent = 'Modifier preview: -';
+      return;
+    }
+
+    const terrainMod = (h.terrain === 'woods') ? -1 : 0;
+    const terrainText = terrainMod ? `terrain ${terrainMod}` : 'terrain 0';
+
+    if (u.type !== 'inf') {
+      elModifierPreview.textContent =
+        `Modifier preview (${u.side.toUpperCase()} ${UNIT_BY_ID.get(u.type)?.abbrev || u.type}): ${terrainText}, reinforcement n/a, minimum 1 die.`;
+      return;
+    }
+
+    const profile = reinforcementPreviewForAnchor(previewKey);
+    const reinfMod = (profile && profile.active) ? -1 : 0;
+    if (profile && profile.active) {
+      const dirText = profile.braceDirs.map(d => d.toUpperCase()).join('/');
+      elModifierPreview.textContent =
+        `Modifier preview (front attack): ${terrainText}, reinforcement ${reinfMod} ` +
+        `(adjacent brace pair), active vs attacks from ${dirText}, minimum 1 die.`;
+      return;
+    }
+
+    elModifierPreview.textContent =
+      `Modifier preview (front attack): ${terrainText}, reinforcement 0 ` +
+      `(needs two adjacent friendly infantry touching each other), minimum 1 die.`;
+  }
+
+  function setCombatSupportStatus(text, cls = 'na') {
+    if (!elCombatSupport) return;
+    elCombatSupport.textContent = text;
+    elCombatSupport.classList.remove('active', 'inactive', 'na');
+    elCombatSupport.classList.add(cls);
+  }
+
+  function supportStatusForCombat(info) {
+    const ranks = Math.max(0, Number(info?.supportRanks || 0));
+    const dicePenalty = Math.abs(Number(info?.supportDiceMod || 0));
+    const pairCount = Math.max(0, Number(info?.supportPairCount || 0));
+    const matchingCount = Math.max(0, Number(info?.supportMatchingCount || 0));
+    const attackDir = String(info?.supportAttackDir || '').toUpperCase();
+
+    if (!info || info.kind !== 'melee' || info.defenderType !== 'inf') {
+      return {
+        text: 'Infantry support: not applicable (only melee attacks into Infantry).',
+        cls: 'na',
+      };
+    }
+
+    if (ranks > 0 && dicePenalty > 0) {
+      return {
+        text:
+          `Infantry support ACTIVE: adjacent brace pair matched attack direction ${attackDir}. ` +
+          `Attacker -${dicePenalty} die${dicePenalty === 1 ? '' : 's'}.`,
+        cls: 'active',
+      };
+    }
+
+    const reason = pairCount === 0
+      ? 'no adjacent friendly INF pair on defender'
+      : `attack direction ${attackDir || '?'} did not match braced sides (${matchingCount} matches)`;
+    return {
+      text: `Infantry support not active: ${reason}.`,
+      cls: 'inactive',
+    };
+  }
+
   function clearCombatBreakdown() {
     state.lastCombat = null;
     if (elCombatSummary) elCombatSummary.textContent = 'No combat yet. Select a unit and attack to see exact dice math.';
     if (elCombatMath) elCombatMath.textContent = 'Dice math: -';
-    if (elCombatTerrain) elCombatTerrain.textContent = 'Terrain modifier: -';
-    if (elCombatOutcome) elCombatOutcome.textContent = 'Outcome: -';
+    if (elCombatTerrain) elCombatTerrain.textContent = 'Defense modifiers: -';
+    setCombatSupportStatus('Infantry support: -', 'na');
     if (elCombatHint) elCombatHint.textContent = COMBAT_RULE_HINT;
   }
 
   function renderCombatBreakdown(rolls, info) {
-    if (!elCombatSummary || !elCombatMath || !elCombatTerrain || !elCombatOutcome) return;
+    if (!elCombatSummary || !elCombatMath || !elCombatTerrain) return;
     if (!info) {
       clearCombatBreakdown();
       return;
@@ -3952,28 +4048,33 @@ function unitColors(side) {
     const pivotText = info.pivoted ? ` (defender pivoted from ${info.pivotFrom})` : '';
     const terrainName = terrainLabel(info.defenderTerrain || 'clear');
     const terrainDelta = Number(info.terrainDiceMod || 0);
+    const supportDelta = Number(info.supportDiceMod || 0);
+    const supportRanks = Math.max(0, Number(info.supportRanks || 0));
+    const supportPairCount = Math.max(0, Number(info.supportPairCount || 0));
+    const supportMatchingCount = Math.max(0, Number(info.supportMatchingCount || 0));
+    const supportAttackDir = String(info.supportAttackDir || '').toUpperCase();
     const terrainMath = terrainDelta
       ? `${terrainName} ${terrainDelta > 0 ? `+${terrainDelta}` : `${terrainDelta}`} die`
       : `${terrainName}: no dice change`;
+    const supportMath = supportDelta
+      ? `${supportRanks} line ${supportDelta > 0 ? `+${supportDelta}` : `${supportDelta}`} die (matched pairs ${supportMatchingCount}, attack ${supportAttackDir})`
+      : `none (available pairs ${supportPairCount}, attack ${supportAttackDir || '?'})`;
     const flankText = info.flankBonus ? ` + flank ${info.flankBonus}` : '';
     const rearText = info.rearBonus ? ` + rear ${info.rearBonus}` : '';
     const terrainText = terrainDelta ? ` ${terrainDelta > 0 ? '+' : '-'} terrain ${Math.abs(terrainDelta)}` : '';
+    const supportText = supportDelta ? ` - support ${Math.abs(supportDelta)}` : '';
 
     elCombatSummary.textContent =
       `${info.attacker} ${info.kind.toUpperCase()} r${info.dist}${posText} vs ${info.defender}${pivotText}.`;
     elCombatMath.textContent =
-      `Dice math: base ${info.baseDice}${flankText}${rearText}${terrainText} = ${info.dice}.`;
+      `Dice math: base ${info.baseDice}${flankText}${rearText}${terrainText}${supportText} = ${info.dice}.`;
     elCombatTerrain.textContent =
-      `Terrain modifier: ${terrainMath}.`;
+      `Defense modifiers: terrain ${terrainMath}; infantry support ${supportMath}.`;
+    const supportStatus = supportStatusForCombat(info);
+    setCombatSupportStatus(supportStatus.text, supportStatus.cls);
 
-    const retreatResolved =
-      (typeof info.retreatMoved === 'number' || typeof info.retreatBlocked === 'number')
-        ? ` · Retreat resolve: moved ${info.retreatMoved || 0}, blocked ${info.retreatBlocked || 0}`
-        : '';
-    const destroyedText = info.destroyed ? ' · Defender destroyed.' : '';
-    const hpText = Number.isFinite(info.defenderHpAfter) ? ` · Defender HP now ${Math.max(0, info.defenderHpAfter)}.` : '';
-    elCombatOutcome.textContent =
-      `Outcome: hits ${info.hits}, retreats ${info.retreats}, misses ${info.misses}${retreatResolved}${destroyedText}${hpText}`;
+    const conciseOutcome = `This roll: ${info.hits} hit${info.hits === 1 ? '' : 's'}, ${info.retreats} retreat${info.retreats === 1 ? '' : 's'}, ${info.misses} miss${info.misses === 1 ? '' : 'es'}.`;
+    if (elDiceOutcomeBrief) elDiceOutcomeBrief.textContent = conciseOutcome;
 
     if (elCombatHint) elCombatHint.textContent = COMBAT_RULE_HINT;
   }
@@ -3983,10 +4084,6 @@ function unitColors(side) {
 
     diceRenderNonce += 1;
     const renderNonce = diceRenderNonce;
-    state.combatBusy = true;
-    state.combatBusyUntil = Date.now() + diceAnimationDurationMs(Array.isArray(rolls) ? rolls.length : 0);
-    if (elCornerDiceHud) elCornerDiceHud.classList.add('combat-active');
-    updateHud();
 
     const posText = (info.impactPosition && info.impactPosition !== 'none') ? `, ${info.impactPosition}` : '';
     const pivotText = info.pivoted ? ', pivot' : '';
@@ -3994,18 +4091,25 @@ function unitColors(side) {
     const rearText = info.rearBonus ? `, rear +${info.rearBonus}` : '';
     const terrainName = terrainLabel(info.defenderTerrain || 'clear');
     const terrainText = info.terrainDiceMod ? `, ${terrainName.toLowerCase()} ${info.terrainDiceMod > 0 ? '+' : ''}${info.terrainDiceMod}` : `, ${terrainName.toLowerCase()} 0`;
+    const supportPairCount = Math.max(0, Number(info.supportPairCount || 0));
+    const supportMatchingCount = Math.max(0, Number(info.supportMatchingCount || 0));
+    const supportAttackDir = String(info.supportAttackDir || '').toUpperCase();
+    const supportText = info.supportDiceMod
+      ? `, support ${info.supportDiceMod > 0 ? '+' : ''}${info.supportDiceMod} (${Math.max(0, Number(info.supportRanks || 0))} line, match ${supportMatchingCount}/${supportPairCount}, atk ${supportAttackDir})`
+      : `, support 0 (pairs ${supportPairCount}, atk ${supportAttackDir || '?'})`;
     const finalSummary =
       `${info.attacker} ${info.kind.toUpperCase()} r${info.dist} vs ${info.defender} · ` +
-      `rolled ${info.dice} dice (base ${info.baseDice}${posText}${pivotText}${flankText}${rearText}${terrainText}) · ` +
+      `rolled ${info.dice} dice (base ${info.baseDice}${posText}${pivotText}${flankText}${rearText}${terrainText}${supportText}) · ` +
       `H ${info.hits} / R ${info.retreats} / M ${info.misses}`;
+    const briefOutcome =
+      `This roll: ${info.hits} hit${info.hits === 1 ? '' : 's'}, ` +
+      `${info.retreats} retreat${info.retreats === 1 ? '' : 's'}, ` +
+      `${info.misses} miss${info.misses === 1 ? '' : 'es'}.`;
     elDiceSummary.textContent = `Rolling ${info.dice} dice…`;
+    if (elDiceOutcomeBrief) elDiceOutcomeBrief.textContent = `This roll: rolling ${info.dice} dice...`;
 
     elDiceTray.innerHTML = '';
     if (elPhysicalDiceRow) elPhysicalDiceRow.innerHTML = '';
-    if (elCornerDiceRow) {
-      elCornerDiceRow.innerHTML = '';
-      if (elCornerDiceHud) elCornerDiceHud.classList.add('has-roll');
-    }
     for (let i = 0; i < rolls.length; i++) {
       const roll = rolls[i];
       const die = document.createElement('div');
@@ -4033,18 +4137,7 @@ function unitColors(side) {
         elPhysicalDiceRow.appendChild(physicalDie);
       }
 
-      let cornerDie = null;
-      let cornerFace = null;
-      if (elCornerDiceRow) {
-        const shell = makePhysicalDieShell(1 + Math.floor(Math.random() * 6), 'rolling', 'Rolling…');
-        cornerDie = shell.shell;
-        cornerFace = shell.face;
-        cornerDie.className = 'physicalDie rolling cornerDie';
-        cornerDie.style.setProperty('--dice-rot', `${Math.floor(Math.random() * 13) - 6}deg`);
-        elCornerDiceRow.appendChild(cornerDie);
-      }
-
-      const settleDelay = DICE_SETTLE_BASE_MS + (i * DICE_SETTLE_STEP_MS);
+      const settleDelay = 180 + (i * 80);
       setTimeout(() => {
         if (renderNonce !== diceRenderNonce) return;
 
@@ -4069,34 +4162,20 @@ function unitColors(side) {
           physicalDie.style.setProperty('--dice-rot', `${Math.floor(Math.random() * 11) - 5}deg`);
           physicalDie.title = `Roll ${roll} (${badge})`;
         }
-
-        if (cornerDie && cornerFace) {
-          applyPhysicalDieFace(cornerFace, roll);
-          cornerDie.className = `physicalDie ${outcome} cornerDie`;
-          cornerDie.style.setProperty('--dice-rot', `${Math.floor(Math.random() * 9) - 4}deg`);
-          cornerDie.title = `Roll ${roll} (${badge})`;
-        }
       }, settleDelay);
     }
 
-    const summaryDelay = DICE_SUMMARY_BASE_MS + (Math.max(0, rolls.length - 1) * DICE_SUMMARY_STEP_MS);
+    const summaryDelay = 220 + (Math.max(0, rolls.length - 1) * 80);
     setTimeout(() => {
       if (renderNonce !== diceRenderNonce) return;
       elDiceSummary.textContent = finalSummary;
-      setTimeout(() => {
-        if (renderNonce !== diceRenderNonce) return;
-        state.combatBusy = false;
-        state.combatBusyUntil = 0;
-        if (elCornerDiceHud) elCornerDiceHud.classList.remove('combat-active');
-        updateHud();
-      }, DICE_POST_HOLD_MS);
+      if (elDiceOutcomeBrief) elDiceOutcomeBrief.textContent = briefOutcome;
     }, summaryDelay);
   }
 
   function log(msg) {
     state.last = msg;
     elHudLast.textContent = msg;
-    if (elStatusLast) elStatusLast.textContent = msg;
 
     state.events.push({ t: Date.now(), msg });
     if (state.events.length > 50) state.events.shift();
@@ -4123,6 +4202,88 @@ function unitColors(side) {
     if (id === 'annihilation') return 'Annihilation';
     if (id === 'decapitation') return 'Decapitation';
     return 'Clear Victory';
+  }
+
+  function clampPct(v) {
+    return Math.max(0, Math.min(100, Number.isFinite(v) ? v : 0));
+  }
+
+  function renderVictoryTrack(blueTotals, redTotals, hideOpponent = false) {
+    if (!elVictoryTrackBody) return;
+
+    if (hideOpponent) {
+      elVictoryTrackBody.innerHTML = '<div class="victoryNote">Victory track hidden during fog draft setup.</div>';
+      return;
+    }
+
+    if (state.victoryMode === 'clear') {
+      const needBlue = Math.max(1, Math.ceil(state.initialUP.red / 2));
+      const needRed = Math.max(1, Math.ceil(state.initialUP.blue / 2));
+      const blueCap = Math.max(0, state.capturedUP.blue);
+      const redCap = Math.max(0, state.capturedUP.red);
+      const bluePct = clampPct((blueCap / needBlue) * 100);
+      const redPct = clampPct((redCap / needRed) * 100);
+      elVictoryTrackBody.innerHTML = `
+        <div class="victoryRow">
+          <div class="victoryLabel blue">Blue</div>
+          <div class="victoryBar"><div class="victoryFill blue" style="width:${bluePct.toFixed(1)}%"></div></div>
+          <div class="victoryValue">UP captured: ${blueCap}/${needBlue}</div>
+        </div>
+        <div class="victoryRow">
+          <div class="victoryLabel red">Red</div>
+          <div class="victoryBar"><div class="victoryFill red" style="width:${redPct.toFixed(1)}%"></div></div>
+          <div class="victoryValue">UP captured: ${redCap}/${needRed}</div>
+        </div>
+        <div class="victoryNote">First side to fill its bar reaches Clear Victory.</div>
+      `;
+      return;
+    }
+
+    if (state.victoryMode === 'decapitation') {
+      elVictoryTrackBody.innerHTML = `
+        <div class="victoryRow">
+          <div class="victoryLabel blue">Blue</div>
+          <div class="victoryNote">Generals left</div>
+          <div class="victoryValue">Generals left: ${blueTotals.gens}</div>
+        </div>
+        <div class="victoryRow">
+          <div class="victoryLabel red">Red</div>
+          <div class="victoryNote">Generals left</div>
+          <div class="victoryValue">Generals left: ${redTotals.gens}</div>
+        </div>
+      `;
+      return;
+    }
+
+    elVictoryTrackBody.innerHTML = `
+      <div class="victoryRow">
+        <div class="victoryLabel blue">Blue</div>
+        <div class="victoryNote">Units left</div>
+        <div class="victoryValue">Units left: ${blueTotals.units}</div>
+      </div>
+      <div class="victoryRow">
+        <div class="victoryLabel red">Red</div>
+        <div class="victoryNote">Units left</div>
+        <div class="victoryValue">Units left: ${redTotals.units}</div>
+      </div>
+    `;
+  }
+
+  function openRulesModal(kind = 'short') {
+    if (!elRulesModal || !elRulesModalBody) return;
+    const full = kind === 'full';
+    if (elRulesModalTitle) {
+      elRulesModalTitle.textContent = full ? 'Rules — Full' : 'Rules — Short';
+    }
+    elRulesModalBody.innerHTML = full ? RULES_FULL_HTML : RULES_SHORT_HTML;
+    elRulesModal.classList.add('open');
+    elRulesModal.setAttribute('aria-hidden', 'false');
+  }
+
+  function closeRulesModal() {
+    if (!elRulesModal) return;
+    elRulesModal.classList.remove('open');
+    elRulesModal.setAttribute('aria-hidden', 'true');
   }
 
   function normalizeDraftMode(mode) {
@@ -4453,7 +4614,10 @@ function unitColors(side) {
 
   function setOnlineStatus(msg) {
     net.status = String(msg || 'Online: idle.');
-    if (elOnlineStatus) elOnlineStatus.textContent = net.status;
+    if (elOnlineStatus) {
+      elOnlineStatus.textContent = '';
+      elOnlineStatus.style.display = 'none';
+    }
   }
 
   function onlineRoleHintText() {
@@ -4622,6 +4786,9 @@ function unitColors(side) {
       } else {
         setOnlineStatus(`Connected to room ${net.remoteCode || '----'}.`);
       }
+      if (net.isHost) {
+        maybeRollOnlineOpeningInitiative();
+      }
       if (net.isHost) onlineBroadcastSnapshot('peer-open');
       else onlineSendPacket({ kind: 'hello' });
       updateHud();
@@ -4757,19 +4924,27 @@ function unitColors(side) {
     const blue = totals('blue');
     const red = totals('red');
     document.body.dataset.mode = state.mode;
-    document.body.dataset.combat = state.combatBusy ? 'on' : 'off';
 
     elHudTitle.textContent = GAME_NAME;
+    if (elHudLast) {
+      if (state.gameOver && state.winner) {
+        const winnerLabel = state.winner === 'red' ? 'Red' : 'Blue';
+        elHudLast.textContent = `Game Over: ${winnerLabel} wins.`;
+        elHudLast.classList.add('show');
+      } else {
+        elHudLast.textContent = '';
+        elHudLast.classList.remove('show');
+      }
+    }
 
     const hideOpponentDuringFog = state.draft.active && state.draft.mode === 'fog' && !state.draft.reveal;
     const modeLabel = (state.mode === 'play') ? 'Play Mode' : 'Setup Mode';
     const sideLabel = (state.side === 'blue') ? 'Blue' : 'Red';
-    const aiMeta = (state.gameMode === 'hvai')
-      ? ` • Red AI (${aiDifficultyLabel(state.aiDifficulty)})`
-      : '';
     const modeMeta =
       state.gameMode === 'online' ? ' • Online mode' :
-      aiMeta;
+      (state.gameMode === 'hvai'
+        ? ` • You ${state.humanSide.toUpperCase()} vs ${aiSide().toUpperCase()} AI (${aiDifficultyLabel()} difficulty)`
+        : '');
     const meta = [
       `${modeLabel}${modeMeta}`,
       `Battle Line: ${forwardAxisLabel(state.forwardAxis)}`,
@@ -4786,9 +4961,6 @@ function unitColors(side) {
     if (state.aiBusy) {
       meta.push('AI is choosing actions...');
     }
-    if (state.combatBusy) {
-      meta.push('Combat resolving: dice rolling...');
-    }
     if (state.draft.active) {
       if (hideOpponentDuringFog) {
         meta.push(
@@ -4803,13 +4975,14 @@ function unitColors(side) {
       }
     }
     meta.push(`Build ${BUILD_ID}`);
-    const joinedMeta = meta.join('  ·  ');
-    elHudMeta.textContent = joinedMeta;
-    if (elStatusMeta) {
-      elStatusMeta.textContent = meta.join('\n');
-    }
-    if (elStatusLast) {
-      elStatusLast.textContent = state.last || '-';
+    elHudMeta.textContent = meta.join('  ·  ');
+    renderVictoryTrack(blue, red, hideOpponentDuringFog);
+    if (elForceTotals) {
+      if (hideOpponentDuringFog) {
+        elForceTotals.textContent = 'Forces: hidden during fog draft setup.';
+      } else {
+        elForceTotals.textContent = `Forces: Blue ${blue.up} UP / ${blue.hp} HP · Red ${red.up} UP / ${red.hp} HP`;
+      }
     }
 
     elModeBtn.textContent = state.mode === 'edit' ? 'Start Battle' : 'Back to Setup';
@@ -4819,14 +4992,17 @@ function unitColors(side) {
     }
     const onlineMode = onlineModeActive();
     const guestOnlineLock = onlineMode && net.connected && !net.isHost;
-    const aiMode = (state.gameMode === 'hvai');
-    if (elAiDifficultyRow) {
-      elAiDifficultyRow.style.display = '';
-      elAiDifficultyRow.style.opacity = aiMode ? '1' : '0.66';
+    if (elPlayerSideSel) {
+      elPlayerSideSel.value = normalizeSide(state.humanSide);
+      elPlayerSideSel.disabled = state.gameMode !== 'hvai' || state.mode === 'play' || onlineMode;
     }
     if (elAiDifficultySel) {
+      const aiLock = onlineMode && net.connected;
       elAiDifficultySel.value = normalizeAiDifficulty(state.aiDifficulty);
-      elAiDifficultySel.disabled = state.aiBusy || guestOnlineLock;
+      elAiDifficultySel.disabled = state.gameMode !== 'hvai' || aiLock || (state.mode === 'play' && state.aiBusy);
+    }
+    if (elVictorySel) {
+      elVictorySel.disabled = state.mode === 'play' || guestOnlineLock;
     }
     const shownCode = normalizeOnlineCode(net.isHost ? net.myCode : net.remoteCode);
     elModeBtn.disabled = guestOnlineLock;
@@ -4834,8 +5010,14 @@ function unitColors(side) {
       elOnlineMyCode.textContent = shownCode || '----';
       elOnlineMyCode.classList.toggle('empty', !shownCode);
     }
-    if (elOnlineRoleHint) elOnlineRoleHint.textContent = onlineRoleHintText();
-    if (elOnlineStatus) elOnlineStatus.textContent = net.status;
+    if (elOnlineRoleHint) {
+      elOnlineRoleHint.textContent = '';
+      elOnlineRoleHint.style.display = 'none';
+    }
+    if (elOnlineStatus) {
+      elOnlineStatus.textContent = '';
+      elOnlineStatus.style.display = 'none';
+    }
     if (elOnlineHostBtn) setActive(elOnlineHostBtn, onlineMode && !!net.peer && net.isHost);
     if (elOnlineJoinBtn) setActive(elOnlineJoinBtn, onlineMode && !!net.peer && !net.isHost);
     if (elOnlineHostBtn) {
@@ -4919,8 +5101,6 @@ function unitColors(side) {
       if (elScenarioLessonSel) elScenarioLessonSel.disabled = true;
       if (elScenarioSizeSel) elScenarioSizeSel.disabled = true;
       if (elScenarioTerrainSel) elScenarioTerrainSel.disabled = true;
-      if (elLoadScenarioBtn) elLoadScenarioBtn.disabled = true;
-      if (elClearUnitsBtn) elClearUnitsBtn.disabled = true;
       if (elExportStateBtn) elExportStateBtn.disabled = true;
       if (elImportStateBtn) elImportStateBtn.disabled = true;
     }
@@ -4944,7 +5124,7 @@ function unitColors(side) {
   }
 
   function isAiControlledSide(side) {
-    return state.gameMode === 'hvai' && side === 'red';
+    return state.gameMode === 'hvai' && normalizeSide(side) === aiSide();
   }
 
   function isAiTurnActive() {
@@ -4956,40 +5136,15 @@ function unitColors(side) {
       clearTimeout(state.aiTimer);
       state.aiTimer = null;
     }
-    state.aiQueuedFollowup = null;
     state.aiBusy = false;
   }
 
-  function scheduleAiStep(delayMs = aiTimingForDifficulty(state.aiDifficulty).stepMs, handler = runAiTurnStep) {
+  function scheduleAiStep(delayMs = AI_STEP_DELAY_MS) {
     if (state.aiTimer) clearTimeout(state.aiTimer);
     state.aiTimer = setTimeout(() => {
       state.aiTimer = null;
-      handler();
+      runAiTurnStep();
     }, delayMs);
-  }
-
-  function aiPostActionDelayMs(plan) {
-    const timing = aiTimingForDifficulty(state.aiDifficulty);
-    let delay = Math.max(180, timing.stepMs || 0);
-
-    if (plan?.type === 'move') {
-      delay = Math.max(delay, (timing.stepMs || 0) + (timing.movePauseMs || 0));
-    }
-    if (plan?.type === 'attack') {
-      delay = Math.max(delay, timing.combatPauseMs || 0);
-    }
-
-    const moveRemaining = Math.max(0, (state.moveAnimUntil || 0) - Date.now());
-    if (moveRemaining > 0) {
-      delay = Math.max(delay, moveRemaining + 120);
-    }
-
-    const combatRemaining = Math.max(0, (state.combatBusyUntil || 0) - Date.now());
-    if (combatRemaining > 0) {
-      delay = Math.max(delay, combatRemaining + 140);
-    }
-
-    return delay;
   }
 
   function nearestEnemyDistance(fromKey, side) {
@@ -5007,40 +5162,32 @@ function unitColors(side) {
     return best;
   }
 
-  function aiAttackScore(attackerKey, targetKey, attackerUnit, difficulty = 'standard') {
-    const prof = attackDiceFor(attackerKey, targetKey, attackerUnit);
-    if (!prof) return -Infinity;
+  function aiAttackScore(attackerKey, targetKey, attackerUnit) {
+    const attackProf = attackDiceFor(attackerKey, targetKey, attackerUnit);
+    if (!attackProf) return -Infinity;
 
     const target = unitsByHex.get(targetKey);
     if (!target) return -Infinity;
+    const ai = aiDifficultyProfile();
 
     let score = 0;
-    score += prof.dice * 6;
-    if (prof.kind === 'melee') score += 2;
-    if (target.type === 'gen') score += 20;
+    score += attackProf.dice * 6;
+    if (attackProf.kind === 'melee') score += 2;
+    if (target.type === 'gen') score += 20 + ai.genFocusBonus;
     score += unitUpValue(target.type, target.quality);
     score += Math.max(0, 3 - target.hp) * 2;
     if (!retreatPick(attackerKey, targetKey)) score += 2;
-
-    const level = normalizeAiDifficulty(difficulty);
-    if (level === 'easy') {
-      // Easy AI often misses strategic command targets.
-      if (target.type === 'gen') score -= 10;
-      if (prof.kind === 'ranged') score += 1;
-    } else if (level === 'hard') {
-      if (target.type === 'gen') score += 8;
-      if (target.hp <= 2) score += 6;
-      if (prof.kind === 'melee' && !retreatPick(attackerKey, targetKey)) score += 3;
-    }
+    score *= ai.attackScale;
+    score += (Math.random() * 2 - 1) * ai.attackNoise;
     return score;
   }
 
-  function bestAiAttackFrom(attackerKey, attackerUnit, difficulty = 'standard') {
+  function bestAiAttackFrom(attackerKey, attackerUnit) {
     let bestTargetKey = null;
     let bestScore = -Infinity;
     const targets = computeAttackTargets(attackerKey, attackerUnit);
     for (const targetKey of targets) {
-      const score = aiAttackScore(attackerKey, targetKey, attackerUnit, difficulty);
+      const score = aiAttackScore(attackerKey, targetKey, attackerUnit);
       if (score > bestScore) {
         bestScore = score;
         bestTargetKey = targetKey;
@@ -5050,9 +5197,9 @@ function unitColors(side) {
     return { targetKey: bestTargetKey, score: bestScore };
   }
 
-  function aiMoveScore(fromKey, destKey, unit, actCtx, difficulty = 'standard') {
+  function aiMoveScore(fromKey, destKey, unit, actCtx) {
+    const ai = aiDifficultyProfile();
     let score = 0;
-    const level = normalizeAiDifficulty(difficulty);
 
     const fromDist = nearestEnemyDistance(fromKey, unit.side);
     const toDist = nearestEnemyDistance(destKey, unit.side);
@@ -5061,12 +5208,8 @@ function unitColors(side) {
       score += Math.max(0, 8 - toDist) * 0.5;
     }
 
-    const follow = bestAiAttackFrom(destKey, unit, difficulty);
-    if (follow) {
-      if (level === 'easy') score += 1.5 + follow.score * 0.1;
-      else if (level === 'hard') score += 6 + follow.score * 0.34;
-      else score += 4 + follow.score * 0.2;
-    }
+    const follow = bestAiAttackFrom(destKey, unit);
+    if (follow) score += 4 + follow.score * 0.2;
 
     if (isEngaged(destKey, unit.side)) score += 2;
 
@@ -5074,7 +5217,7 @@ function unitColors(side) {
       const inCmd = inCommandAt(destKey, unit.side);
       if (!inCmd) {
         // Prefer not drifting command-dependent units away from command links.
-        score -= (level === 'hard') ? 6 : 3;
+        score -= 3;
       } else if (actCtx.inCommandStart) {
         score += 0.5;
       }
@@ -5087,13 +5230,8 @@ function unitColors(side) {
       if (h.terrain === 'rough' && unit.type === 'cav') score -= 0.75;
     }
 
-    if (level === 'easy') {
-      if (Number.isFinite(toDist) && toDist <= 2) score -= 1.5;
-    } else if (level === 'hard') {
-      if (Number.isFinite(toDist) && toDist <= 2) score += 1.25;
-      if (unit.type === 'gen' && isEngaged(destKey, unit.side)) score -= 6;
-    }
-
+    score *= ai.moveScale;
+    score += (Math.random() * 2 - 1) * ai.moveNoise;
     return score;
   }
 
@@ -5105,9 +5243,14 @@ function unitColors(side) {
     return null;
   }
 
-  function collectAiCandidatePlans(difficulty = 'standard') {
-    const attacks = [];
-    const moves = [];
+  function chooseAiActionPlan() {
+    const ai = aiDifficultyProfile();
+    let bestAttack = null;
+    let bestAttackScore = -Infinity;
+
+    let bestMove = null;
+    let bestMoveScore = -Infinity;
+
     let passPlan = null;
 
     for (const [fromKey, u] of unitsByHex) {
@@ -5115,15 +5258,15 @@ function unitColors(side) {
 
       if (!passPlan) passPlan = { type: 'pass', fromKey };
 
-      const attackTargets = computeAttackTargets(fromKey, u);
-      for (const targetKey of attackTargets) {
-        const score = aiAttackScore(fromKey, targetKey, u, difficulty);
-        attacks.push({
+      const attack = bestAiAttackFrom(fromKey, u);
+      if (attack && attack.score > bestAttackScore) {
+        bestAttackScore = attack.score;
+        bestAttack = {
           type: 'attack',
           fromKey,
-          targetKey,
-          score,
-        });
+          targetKey: attack.targetKey,
+          score: attack.score,
+        };
       }
 
       const actCtx = {
@@ -5131,83 +5274,39 @@ function unitColors(side) {
       };
       const moveTargets = computeMoveTargets(fromKey, u, actCtx);
       for (const destKey of moveTargets) {
-        const score = aiMoveScore(fromKey, destKey, u, actCtx, difficulty);
-        moves.push({
-          type: 'move',
-          fromKey,
-          destKey,
-          score,
-        });
+        const score = aiMoveScore(fromKey, destKey, u, actCtx);
+        if (score > bestMoveScore) {
+          bestMoveScore = score;
+          bestMove = {
+            type: 'move',
+            fromKey,
+            destKey,
+            score,
+          };
+        }
       }
     }
 
-    return { attacks, moves, passPlan };
-  }
-
-  function chooseAiActionPlanEasy() {
-    const { attacks, moves, passPlan } = collectAiCandidatePlans('easy');
-    const pool = [...attacks, ...moves];
-    if (!pool.length) return passPlan;
-
-    // Easy AI intentionally picks from weaker options more often.
-    pool.sort((a, b) => a.score - b.score);
-    const weakPoolSize = Math.max(1, Math.ceil(pool.length * 0.55));
-    const weakIndex = Math.floor(Math.random() * weakPoolSize);
-    if (passPlan && Math.random() < 0.18) return passPlan;
-    return pool[weakIndex];
-  }
-
-  function chooseAiActionPlanStandard() {
-    const { attacks, moves, passPlan } = collectAiCandidatePlans('standard');
-    let bestAttack = null;
-    let bestAttackScore = -Infinity;
-    for (const a of attacks) {
-      if (a.score > bestAttackScore) {
-        bestAttackScore = a.score;
-        bestAttack = a;
-      }
+    if (passPlan && state.actsUsed > 0 && Math.random() < ai.passChance) {
+      return passPlan;
     }
 
-    let bestMove = null;
-    let bestMoveScore = -Infinity;
-    for (const m of moves) {
-      if (m.score > bestMoveScore) {
-        bestMoveScore = m.score;
-        bestMove = m;
-      }
+    if (bestAttack && bestMove) {
+      const attackAdj = bestAttack.score + ai.attackBias;
+      const moveAdj = bestMove.score + ai.moveBias;
+      return attackAdj >= moveAdj ? bestAttack : bestMove;
     }
-
     if (bestAttack) return bestAttack;
     if (bestMove) return bestMove;
     return passPlan;
   }
 
-  function chooseAiActionPlanHard() {
-    const { attacks, moves, passPlan } = collectAiCandidatePlans('hard');
-    const all = [...attacks, ...moves];
-    if (!all.length) return passPlan;
-
-    all.sort((a, b) => b.score - a.score);
-    const topCount = Math.min(3, all.length);
-    return all[Math.floor(Math.random() * topCount)];
-  }
-
-  function chooseAiActionPlan() {
-    const level = normalizeAiDifficulty(state.aiDifficulty);
-    if (level === 'easy') return chooseAiActionPlanEasy();
-    if (level === 'hard') return chooseAiActionPlanHard();
-    return chooseAiActionPlanStandard();
-  }
-
-  function executeAiActionPlan(plan, options = {}) {
+  function executeAiActionPlan(plan) {
     if (!plan) return false;
     const actsBefore = state.actsUsed;
-    const alreadySelected = !!options.alreadySelected;
 
-    if (!alreadySelected || state.selectedKey !== plan.fromKey) {
-      selectUnit(plan.fromKey);
-      if (state.selectedKey !== plan.fromKey) return false;
-    }
+    selectUnit(plan.fromKey);
+    if (state.selectedKey !== plan.fromKey) return false;
 
     if (plan.type === 'attack') {
       if (!state._attackTargets || !state._attackTargets.has(plan.targetKey)) {
@@ -5234,7 +5333,7 @@ function unitColors(side) {
         let bestScore = -Infinity;
         if (movedUnit) {
           for (const targetKey of state._attackTargets) {
-            const score = aiAttackScore(plan.destKey, targetKey, movedUnit, state.aiDifficulty);
+            const score = aiAttackScore(plan.destKey, targetKey, movedUnit);
             if (score > bestScore) {
               bestScore = score;
               bestTargetKey = targetKey;
@@ -5242,16 +5341,7 @@ function unitColors(side) {
           }
         }
         if (bestTargetKey && state._attackTargets.has(bestTargetKey)) {
-          if (isAiTurnActive()) {
-            const timing = aiTimingForDifficulty(state.aiDifficulty);
-            state.aiQueuedFollowup = {
-              fromKey: plan.destKey,
-              targetKey: bestTargetKey,
-              delayMs: Math.max(180, timing.movePauseMs || 0),
-            };
-          } else {
-            attackFromSelection(bestTargetKey);
-          }
+          attackFromSelection(bestTargetKey);
         } else {
           clearSelection();
           updateHud();
@@ -5271,102 +5361,6 @@ function unitColors(side) {
     clearSelection();
     updateHud();
     return false;
-  }
-
-  function beginAiPlanExecution(plan) {
-    if (!plan) return false;
-    const timing = aiTimingForDifficulty(state.aiDifficulty);
-    const intentMs = Math.max(
-      120,
-      plan.type === 'pass'
-        ? Math.floor((timing.intentMs || 260) * 0.7)
-        : (timing.intentMs || 260)
-    );
-
-    clearSelection();
-    selectUnit(plan.fromKey);
-    if (state.selectedKey !== plan.fromKey) return false;
-
-    const u = unitsByHex.get(plan.fromKey);
-    const unitDef = u ? UNIT_BY_ID.get(u.type) : null;
-    const unitLabel = u ? `${u.side.toUpperCase()} ${unitDef ? unitDef.abbrev : u.type}` : 'unit';
-    if (plan.type === 'attack') {
-      log(`AI lining up attack with ${unitLabel}...`);
-    } else if (plan.type === 'move') {
-      log(`AI maneuvering ${unitLabel}...`);
-    } else {
-      log(`AI considering pass with ${unitLabel}...`);
-    }
-    updateHud();
-
-    scheduleAiStep(intentMs, () => {
-      if (!isAiTurnActive()) {
-        stopAiLoop();
-        updateHud();
-        return;
-      }
-
-      const acted = executeAiActionPlan(plan, { alreadySelected: true });
-      if (!isAiTurnActive()) {
-        stopAiLoop();
-        updateHud();
-        return;
-      }
-
-      if (!acted) {
-        // Fallback once: try pass with any legal unit, else end turn.
-        if (plan.type !== 'pass') {
-          const passPlan = chooseAiPassPlan();
-          if (passPlan && beginAiPlanExecution(passPlan)) return;
-        }
-        stopAiLoop();
-        endTurn();
-        return;
-      }
-
-      if (state.actsUsed >= ACT_LIMIT) {
-        stopAiLoop();
-        endTurn();
-        return;
-      }
-
-      if (state.aiQueuedFollowup) {
-        const queued = state.aiQueuedFollowup;
-        state.aiQueuedFollowup = null;
-        scheduleAiStep(queued.delayMs, () => {
-          if (!isAiTurnActive()) {
-            stopAiLoop();
-            updateHud();
-            return;
-          }
-
-          if (state.selectedKey === queued.fromKey && state._attackTargets && state._attackTargets.has(queued.targetKey)) {
-            setAttackFlash(queued.targetKey, ATTACK_FLASH_MS + 180);
-            attackFromSelection(queued.targetKey);
-          } else {
-            clearSelection();
-            updateHud();
-          }
-
-          if (!isAiTurnActive()) {
-            stopAiLoop();
-            updateHud();
-            return;
-          }
-          if (state.actsUsed >= ACT_LIMIT) {
-            stopAiLoop();
-            endTurn();
-            return;
-          }
-          scheduleAiStep(aiPostActionDelayMs({ type: 'attack' }));
-        });
-        return;
-      }
-
-      scheduleAiStep(aiPostActionDelayMs(plan));
-    });
-
-    return true;
   }
 
   function runAiTurnStep() {
@@ -5389,14 +5383,30 @@ function unitColors(side) {
       return;
     }
 
-    if (!beginAiPlanExecution(plan)) {
+    const acted = executeAiActionPlan(plan);
+    if (!isAiTurnActive()) {
+      stopAiLoop();
+      updateHud();
+      return;
+    }
+
+    if (!acted) {
+      // Fallback once: try a pass from any legal unit, then give up turn.
       const passPlan = chooseAiPassPlan();
-      if (!passPlan || !beginAiPlanExecution(passPlan)) {
+      if (!passPlan || !executeAiActionPlan(passPlan)) {
         stopAiLoop();
         endTurn();
         return;
       }
     }
+
+    if (state.actsUsed >= ACT_LIMIT) {
+      stopAiLoop();
+      endTurn();
+      return;
+    }
+
+    scheduleAiStep();
   }
 
   function maybeStartAiTurn() {
@@ -5408,9 +5418,9 @@ function unitColors(side) {
 
     state.aiBusy = true;
     clearSelection();
-    log(`AI turn: ${state.side.toUpperCase()} is acting (${aiDifficultyLabel(state.aiDifficulty)}).`);
+    log(`AI turn: ${state.side.toUpperCase()} is acting...`);
     updateHud();
-    scheduleAiStep(aiTimingForDifficulty(state.aiDifficulty).startMs);
+    scheduleAiStep(AI_START_DELAY_MS);
   }
 
   // --- Rules helpers
@@ -5424,6 +5434,16 @@ function unitColors(side) {
 
     // hills/woods/rough
     return (unitType === 'cav') ? 3 : 2;
+  }
+
+  function hasAdjacentTerrain(hexKey, terrainId) {
+    const h = board.byKey.get(hexKey);
+    if (!h) return false;
+    for (const nk of h.neigh) {
+      const nh = board.byKey.get(nk);
+      if (nh && nh.terrain === terrainId) return true;
+    }
+    return false;
   }
 
   function isEngaged(hexKey, side) {
@@ -5648,9 +5668,189 @@ function unitColors(side) {
     return null;
   }
 
+  function movementPathKeys(fromKey, toKey, unit) {
+    if (fromKey === toKey) return [fromKey];
+    if (!unit) return [fromKey, toKey];
+    const mp = unitMovePoints(unit);
+    if (mp <= 0) return [fromKey, toKey];
+
+    const best = new Map();
+    const prev = new Map();
+    const pq = [{ k: fromKey, c: 0 }];
+    best.set(fromKey, 0);
+
+    while (pq.length) {
+      pq.sort((a, b) => a.c - b.c);
+      const cur = pq.shift();
+      if (!cur) break;
+      if (cur.k === toKey) break;
+
+      const h = board.byKey.get(cur.k);
+      if (!h) continue;
+
+      for (const nk of h.neigh) {
+        if (isOccupied(nk) && nk !== toKey) continue;
+        const nh = board.byKey.get(nk);
+        if (!nh) continue;
+
+        const stepCost = terrainMoveCost(unit.type, nh.terrain);
+        if (!Number.isFinite(stepCost)) continue;
+
+        const nc = cur.c + stepCost;
+        if (nc > mp) continue;
+
+        const prevBest = best.get(nk);
+        if (prevBest !== undefined && nc >= prevBest) continue;
+
+        best.set(nk, nc);
+        prev.set(nk, cur.k);
+        pq.push({ k: nk, c: nc });
+      }
+    }
+
+    if (!best.has(toKey)) return [fromKey, toKey];
+
+    const path = [toKey];
+    let cur = toKey;
+    let guard = 0;
+    while (cur !== fromKey && guard < 256) {
+      const p = prev.get(cur);
+      if (!p) break;
+      path.push(p);
+      cur = p;
+      guard += 1;
+    }
+    path.reverse();
+    if (path[0] !== fromKey) return [fromKey, toKey];
+    return path;
+  }
+
+  function startMoveAnimation(pathKeys, unit, isAiMove = false) {
+    if (!Array.isArray(pathKeys) || pathKeys.length < 2 || !unit) {
+      stopMoveAnimation();
+      return;
+    }
+
+    stopMoveAnimation();
+
+    const perStep = isAiMove ? MOVE_ANIM_STEP_MS_AI : MOVE_ANIM_STEP_MS_HUMAN;
+    const durationMs = Math.max(perStep, (pathKeys.length - 1) * perStep);
+    state.moveAnim = {
+      unitId: unit.id,
+      toKey: pathKeys[pathKeys.length - 1],
+      pathKeys: [...pathKeys],
+      unit: {
+        id: unit.id,
+        side: unit.side,
+        type: unit.type,
+        quality: unit.quality,
+        hp: unit.hp,
+      },
+      t: 0,
+      startedAt: performance.now(),
+      durationMs,
+    };
+
+    const tick = (ts) => {
+      if (!state.moveAnim) {
+        state.moveAnimRaf = null;
+        return;
+      }
+      const anim = state.moveAnim;
+      const elapsed = ts - anim.startedAt;
+      anim.t = Math.max(0, Math.min(1, elapsed / anim.durationMs));
+      draw();
+
+      if (anim.t >= 1) {
+        state.moveAnim = null;
+        state.moveAnimRaf = null;
+        draw();
+        return;
+      }
+      state.moveAnimRaf = requestAnimationFrame(tick);
+    };
+
+    state.moveAnimRaf = requestAnimationFrame(tick);
+  }
+
   function forwardStepKey(fromKey, side) {
     const dir = sideForwardDirection(side, state.forwardAxis);
     return stepKeyInDirection(fromKey, dir);
+  }
+
+  function isFriendlyInfAt(hexKey, side) {
+    const u = unitsByHex.get(hexKey);
+    return !!u && u.side === side && u.type === 'inf';
+  }
+
+  function infantryBracePairs(defenderKey, side) {
+    if (!isFriendlyInfAt(defenderKey, side)) return [];
+    const ring = ['e', 'ur', 'ul', 'w', 'dl', 'dr'];
+    const pairs = [];
+
+    for (let i = 0; i < ring.length; i++) {
+      const d1 = ring[i];
+      const d2 = ring[(i + 1) % ring.length];
+      const k1 = stepKeyInDirection(defenderKey, d1);
+      const k2 = stepKeyInDirection(defenderKey, d2);
+      if (!k1 || !k2) continue;
+      if (!isFriendlyInfAt(k1, side) || !isFriendlyInfAt(k2, side)) continue;
+      const b1 = oppositeDirection(d1);
+      const b2 = oppositeDirection(d2);
+      if (!b1 || !b2) continue;
+      pairs.push({
+        dirs: [d1, d2],
+        keys: [k1, k2],
+        braceDirs: [b1, b2],
+      });
+    }
+    return pairs;
+  }
+
+  function reinforcementSupportForAttack(defenderKey, attackerKey, defenderUnit) {
+    if (!defenderUnit || defenderUnit.type !== 'inf') {
+      return { supportRanks: 0, active: false, pairs: [], matching: [], supportSet: new Set(), attackDir: null };
+    }
+    const attackDir = adjacentDirection(defenderKey, attackerKey);
+    if (!attackDir) {
+      return { supportRanks: 0, active: false, pairs: [], matching: [], supportSet: new Set(), attackDir: null };
+    }
+
+    const pairs = infantryBracePairs(defenderKey, defenderUnit.side);
+    const matching = pairs.filter(p => p.braceDirs.includes(attackDir));
+    const supportSet = new Set();
+    for (const p of matching) {
+      for (const k of p.keys) supportSet.add(k);
+    }
+
+    const active = matching.length > 0;
+    return {
+      supportRanks: active ? 1 : 0, // one-line deep only
+      active,
+      pairs,
+      matching,
+      supportSet,
+      attackDir,
+    };
+  }
+
+  function reinforcementPreviewForAnchor(anchorKey) {
+    const anchor = unitsByHex.get(anchorKey);
+    if (!anchor || anchor.type !== 'inf') return null;
+    const pairs = infantryBracePairs(anchorKey, anchor.side);
+    const supportSet = new Set();
+    const braceDirSet = new Set();
+    for (const p of pairs) {
+      for (const k of p.keys) supportSet.add(k);
+      for (const d of p.braceDirs) braceDirSet.add(d);
+    }
+    return {
+      active: pairs.length > 0,
+      frontSet: new Set([anchorKey]),
+      supportSet,
+      pairs,
+      braceDirs: Array.from(braceDirSet),
+    };
   }
 
   function canLineAdvanceInfAt(hexKey, u) {
@@ -5813,8 +6013,7 @@ function unitColors(side) {
     const blockText = blockParts.length ? ` blocked(${blockParts.join(', ')})` : '';
 
     log(`Line Advance: ${moves.length}/${formation.length} INF advanced.${blockText}`);
-    updateHud();
-    maybeAutoEndTurnAtActionLimit();
+    if (!maybeAutoEndTurnAfterAction()) updateHud();
   }
 
   function veteranCavPostAttackWithdrawTargets(fromKey, u, actCtx) {
@@ -5907,6 +6106,9 @@ function unitColors(side) {
     // Beyond range 1 requires ranged capability and NOT being engaged.
     if (engaged) return null;
     if (!atkDef.ranged) return null;
+    if (attackerUnit.type === 'arc' && atkHex.terrain === 'woods' && !hasAdjacentTerrain(attackerKey, 'clear')) {
+      return null;
+    }
 
     const dice = atkDef.ranged[dist];
     if (!dice) return null;
@@ -5994,14 +6196,6 @@ function unitColors(side) {
     state.actedUnitIds.add(unitId);
   }
 
-  function maybeAutoEndTurnAtActionLimit() {
-    if (state.mode !== 'play' || state.gameOver) return;
-    if (state.actsUsed < ACT_LIMIT) return;
-    // Do not auto-end while an activation is still in progress.
-    if (state.selectedKey || state.act) return;
-    endTurn();
-  }
-
   function destroyUnit(defenderKey, defenderUnit, attackerSide) {
     const defDef = UNIT_BY_ID.get(defenderUnit.type);
     const destroyedUp = unitUpValue(defenderUnit.type, defenderUnit.quality);
@@ -6043,6 +6237,14 @@ function unitColors(side) {
     const defHex = board.byKey.get(defenderKey);
     const defenderTerrain = defHex?.terrain || 'clear';
     const terrainDiceMod = (defenderTerrain === 'woods') ? -1 : 0;
+    const supportEval = (prof.kind === 'melee')
+      ? reinforcementSupportForAttack(defenderKey, attackerKey, defU)
+      : { supportRanks: 0, active: false, pairs: [], matching: [], supportSet: new Set(), attackDir: null };
+    const supportRanks = supportEval.supportRanks || 0;
+    const supportDiceMod = supportRanks > 0
+      ? -(Math.min(INF_SUPPORT_MAX_RANKS, supportRanks) * INF_SUPPORT_DICE_PER_RANK)
+      : 0;
+    const defenseDiceMod = terrainDiceMod + supportDiceMod;
     const terrainRuleText = (defenderTerrain === 'woods')
       ? 'Defender in Woods: attacker rolls -1 die (minimum 1).'
       : `Defender in ${terrainLabel(defenderTerrain)}: no terrain dice modifier in this ruleset.`;
@@ -6051,7 +6253,7 @@ function unitColors(side) {
     const flankBonus = impact.flankBonus;
     const rearBonus = impact.rearBonus;
     const preTerrainDice = baseDice + impact.totalBonus;
-    const dice = terrainDiceMod ? Math.max(1, preTerrainDice + terrainDiceMod) : preTerrainDice;
+    const dice = defenseDiceMod ? Math.max(1, preTerrainDice + defenseDiceMod) : preTerrainDice;
 
     const rolls = [];
     for (let i = 0; i < dice; i++) rolls.push(rollD6());
@@ -6077,10 +6279,13 @@ function unitColors(side) {
     if (flankBonus) modParts.push(`flank +${flankBonus}`);
     if (rearBonus) modParts.push(`rear +${rearBonus}`);
     if (terrainDiceMod) modParts.push(`${terrainLabel(defenderTerrain).toLowerCase()} ${terrainDiceMod}`);
+    if (supportDiceMod) modParts.push(`inf support ${supportDiceMod}`);
     const modText = ` (${modParts.join(', ')})`;
     const combatInfo = {
       attacker: tag,
       defender: vs,
+      attackerType: atk.type,
+      defenderType: defU.type,
       kind: prof.kind,
       dist: prof.dist,
       dice,
@@ -6092,6 +6297,12 @@ function unitColors(side) {
       pivotFrom,
       woodsPenalty: terrainDiceMod < 0 ? Math.abs(terrainDiceMod) : 0,
       terrainDiceMod,
+      supportRanks,
+      supportDiceMod,
+      defenseDiceMod,
+      supportPairCount: Array.isArray(supportEval.pairs) ? supportEval.pairs.length : 0,
+      supportMatchingCount: Array.isArray(supportEval.matching) ? supportEval.matching.length : 0,
+      supportAttackDir: supportEval.attackDir || '',
       defenderTerrain,
       terrainRuleText,
       hits,
@@ -6108,6 +6319,23 @@ function unitColors(side) {
     renderCombatBreakdown(rolls, combatInfo);
     log(`${tag} ${prof.kind.toUpperCase()}→${vs} r${prof.dist} · dice=${dice}${modText}`);
     log(`Rolls: [${rollTokens.join(' ')}] => hits=${hits}, retreats=${retreats}, misses=${misses}.`);
+    if (prof.kind === 'melee' && defU.type === 'inf') {
+      if (supportRanks > 0 && supportDiceMod < 0) {
+        const ad = String(supportEval.attackDir || '').toUpperCase();
+        log(
+          `Infantry support ACTIVE: adjacent brace pair matched attack ${ad}, ` +
+          `attacker -${Math.abs(supportDiceMod)} die.`
+        );
+      } else {
+        const pairCount = Array.isArray(supportEval.pairs) ? supportEval.pairs.length : 0;
+        const ad = String(supportEval.attackDir || '').toUpperCase();
+        if (pairCount === 0) {
+          log('Infantry support inactive: defender has no adjacent friendly INF brace pair.');
+        } else {
+          log(`Infantry support inactive: attack ${ad} not on braced opposite sides.`);
+        }
+      }
+    }
 
     // Pass 1: apply hits
     if (hits > 0) {
@@ -6214,6 +6442,9 @@ function unitColors(side) {
 
   function enterEdit() {
     stopAiLoop();
+    stopMoveAnimation();
+    stopActionPulse();
+    closeRulesModal();
     state.mode = 'edit';
     state.tool = 'units';
 
@@ -6234,9 +6465,13 @@ function unitColors(side) {
     }
 
     stopAiLoop();
+    stopMoveAnimation();
+    stopActionPulse();
+    closeRulesModal();
     state.mode = 'play';
     state.turn = 1;
-    state.side = 'blue';
+    const onlineRandomStart = state.gameMode === 'online' && net.connected && net.isHost;
+    state.side = onlineRandomStart ? randomStartSide() : 'blue';
     state.actsUsed = 0;
     state.actedUnitIds = new Set();
 
@@ -6254,9 +6489,22 @@ function unitColors(side) {
     clearSelection();
     clearDiceDisplay();
 
-    log('Play: click a friendly unit. Blue goes first.');
+    if (onlineRandomStart) {
+      log(`Play: click a friendly unit. ${state.side.toUpperCase()} was randomly selected to go first.`);
+    } else {
+      log('Play: click a friendly unit. Blue goes first.');
+    }
     updateHud();
     maybeStartAiTurn();
+  }
+
+  function maybeRollOnlineOpeningInitiative() {
+    if (!net.isHost || !onlineModeActive()) return;
+    if (state.mode !== 'play' || state.gameOver) return;
+    if (state.turn !== 1) return;
+    if (state.actsUsed !== 0 || state.actedUnitIds.size > 0) return;
+    state.side = randomStartSide();
+    log(`Online initiative: ${state.side.toUpperCase()} was randomly selected to act first.`);
   }
 
   // --- Editing actions
@@ -6404,159 +6652,6 @@ function unitColors(side) {
     if (roll < 0.20) return 'veteran';
     if (roll < 0.55) return 'regular';
     return 'green';
-  }
-
-  function qualityTargetCounts(type, count) {
-    if (count <= 0) return { veteran: 0, regular: 0, green: 0 };
-    if (type === 'iat') return { veteran: 0, regular: count, green: 0 };
-
-    let veteranRatio = 0.20;
-    let regularRatio = 0.55;
-
-    if (type === 'cav') {
-      veteranRatio = 0.34;
-      regularRatio = 0.46;
-    } else if (type === 'inf') {
-      veteranRatio = 0.16;
-      regularRatio = 0.64;
-    } else if (type === 'arc') {
-      veteranRatio = 0.22;
-      regularRatio = 0.58;
-    } else if (type === 'skr') {
-      veteranRatio = 0.24;
-      regularRatio = 0.52;
-    } else if (type === 'gen' || type === 'run') {
-      veteranRatio = 0.24;
-      regularRatio = 0.60;
-    }
-
-    let veteran = Math.max(0, Math.round(count * veteranRatio));
-    let regular = Math.max(0, Math.round(count * regularRatio));
-    if (veteran + regular > count) regular = Math.max(0, count - veteran);
-    let green = Math.max(0, count - veteran - regular);
-
-    // Keep at least one green in larger groups so the line is not uniformly elite.
-    if (count >= 6 && green === 0) {
-      green = 1;
-      if (regular > veteran && regular > 0) regular -= 1;
-      else if (veteran > 0) veteran -= 1;
-    }
-
-    return { veteran, regular, green };
-  }
-
-  function pickQualityAnchor(entries, scoreFn) {
-    if (!entries.length) return null;
-    let best = entries[0];
-    let bestScore = -Infinity;
-    for (const e of entries) {
-      const score = scoreFn(e);
-      if (score > bestScore) {
-        bestScore = score;
-        best = e;
-      }
-    }
-    return best;
-  }
-
-  function groupedQualityScores(type, depthN, flankN, centerN) {
-    if (type === 'cav') {
-      return {
-        veteran: (depthN * 1.0) + (flankN * 1.35),
-        regular: (depthN * 0.75) + (flankN * 0.6),
-      };
-    }
-    if (type === 'inf') {
-      return {
-        veteran: (depthN * 0.95) + (centerN * 1.0),
-        regular: (depthN * 0.70) + (centerN * 1.2),
-      };
-    }
-    if (type === 'arc') {
-      return {
-        veteran: ((1 - depthN) * 1.1) + (centerN * 0.7),
-        regular: ((1 - depthN) * 1.0) + (centerN * 1.0),
-      };
-    }
-    if (type === 'skr') {
-      return {
-        veteran: (depthN * 0.8) + (flankN * 0.8),
-        regular: (depthN * 0.65) + (centerN * 0.6),
-      };
-    }
-    if (type === 'gen' || type === 'run') {
-      return {
-        veteran: ((1 - depthN) * 0.7) + (centerN * 1.05),
-        regular: ((1 - depthN) * 1.0) + (centerN * 1.1),
-      };
-    }
-    return {
-      veteran: (depthN * 0.8) + (centerN * 0.8),
-      regular: (depthN * 0.7) + (centerN * 0.9),
-    };
-  }
-
-  function assignGroupedQualitiesForType(entries, side, type, geometry) {
-    if (!entries || entries.length === 0) return;
-    if (type === 'iat') {
-      for (const e of entries) e.quality = 'regular';
-      return;
-    }
-
-    const targets = qualityTargetCounts(type, entries.length);
-    const withMeta = entries.map((e) => {
-      const meta = geometry.byKey.get(key(e.q, e.r)) || null;
-      const depthN = sideDepthNorm(meta, side);
-      const flankN = meta ? Math.abs(meta.lateralN - 0.5) * 2 : 0;
-      const centerN = 1 - Math.min(1, flankN);
-      const scores = groupedQualityScores(type, depthN, flankN, centerN);
-      return {
-        e,
-        veteranScore: scores.veteran,
-        regularScore: scores.regular,
-      };
-    });
-
-    const veteranAnchor = pickQualityAnchor(withMeta, (x) => x.veteranScore);
-    const regularAnchor = pickQualityAnchor(withMeta, (x) => {
-      const distFromVeteran = veteranAnchor
-        ? axialDistance(x.e.q, x.e.r, veteranAnchor.e.q, veteranAnchor.e.r)
-        : 0;
-      return x.regularScore + (distFromVeteran * 0.08);
-    });
-
-    const pool = withMeta.slice();
-    function takeNearest(anchor, count, tieKey) {
-      if (!anchor || count <= 0 || pool.length === 0) return [];
-      pool.sort((a, b) => {
-        const da = axialDistance(a.e.q, a.e.r, anchor.e.q, anchor.e.r);
-        const db = axialDistance(b.e.q, b.e.r, anchor.e.q, anchor.e.r);
-        if (da !== db) return da - db;
-        const ak = (typeof a[tieKey] === 'number') ? a[tieKey] : a.regularScore;
-        const bk = (typeof b[tieKey] === 'number') ? b[tieKey] : b.regularScore;
-        return bk - ak;
-      });
-      return pool.splice(0, Math.min(count, pool.length));
-    }
-
-    const veterans = takeNearest(veteranAnchor, targets.veteran, 'veteranScore');
-    const regulars = takeNearest(regularAnchor, targets.regular, 'regularScore');
-    const greens = pool;
-
-    for (const p of veterans) p.e.quality = 'veteran';
-    for (const p of regulars) p.e.quality = 'regular';
-    for (const p of greens) p.e.quality = 'green';
-  }
-
-  function assignGroupedForceQualities(force, side, geometry) {
-    const byType = new Map();
-    for (const e of force) {
-      if (!byType.has(e.type)) byType.set(e.type, []);
-      byType.get(e.type).push(e);
-    }
-    for (const [type, entries] of byType) {
-      assignGroupedQualitiesForType(entries, side, type, geometry);
-    }
   }
 
   function chooseRandomForwardAxis() {
@@ -6802,9 +6897,91 @@ function unitColors(side) {
     return out;
   }
 
-  function buildRandomForce(side, terrainByHex, occupiedSet, geometry) {
+  function chooseRandomStartupProfile() {
+    const sizeRoll = Math.random();
+    let size = 'medium';
+    let baseUnits = randInt(24, 30);
+    if (sizeRoll < 0.33) {
+      size = 'small';
+      baseUnits = randInt(18, 22);
+    } else if (sizeRoll >= 0.76) {
+      size = 'large';
+      baseUnits = randInt(34, 42);
+    }
+
+    let blueUnits = baseUnits;
+    let redUnits = baseUnits;
+    let matchup = 'even';
+
+    const asymmetryRoll = Math.random();
+    const delta =
+      (size === 'small') ? randInt(3, 6) :
+      (size === 'large') ? randInt(7, 12) :
+      randInt(5, 9);
+
+    if (asymmetryRoll < 0.22) {
+      matchup = 'blue_advantage';
+      blueUnits += delta;
+    } else if (asymmetryRoll < 0.44) {
+      matchup = 'red_advantage';
+      redUnits += delta;
+    }
+
+    return {
+      size,
+      matchup,
+      blueUnits: clampInt(blueUnits, 12, 48, baseUnits),
+      redUnits: clampInt(redUnits, 12, 48, baseUnits),
+    };
+  }
+
+  function forceMixCounts(totalNeeded) {
+    const counts = {
+      gen: totalNeeded >= 34 ? 3 : (totalNeeded >= 24 ? 2 : 1),
+      run: totalNeeded >= 18 ? 1 : 0,
+      iat: totalNeeded >= 18 ? 1 : 0,
+      inf: 0,
+      cav: 0,
+      arc: 0,
+      skr: 0,
+    };
+
+    let remaining = Math.max(0, totalNeeded - counts.gen - counts.run - counts.iat);
+    const min = { inf: 4, cav: 2, arc: 2, skr: 2 };
+    counts.inf = Math.max(min.inf, Math.floor(remaining * 0.46));
+    counts.cav = Math.max(min.cav, Math.floor(remaining * 0.20));
+    counts.arc = Math.max(min.arc, Math.floor(remaining * 0.16));
+    counts.skr = Math.max(min.skr, Math.floor(remaining * 0.18));
+
+    let used = counts.inf + counts.cav + counts.arc + counts.skr;
+    const upOrder = ['inf', 'inf', 'skr', 'arc', 'cav'];
+    let upIdx = 0;
+    while (used < remaining) {
+      const t = upOrder[upIdx % upOrder.length];
+      counts[t] += 1;
+      used += 1;
+      upIdx += 1;
+    }
+
+    const downOrder = ['inf', 'skr', 'arc', 'cav'];
+    while (used > remaining) {
+      let changed = false;
+      for (const t of downOrder) {
+        if (counts[t] > min[t]) {
+          counts[t] -= 1;
+          used -= 1;
+          changed = true;
+          break;
+        }
+      }
+      if (!changed) break;
+    }
+
+    return counts;
+  }
+
+  function buildRandomForce(side, terrainByHex, occupiedSet, geometry, totalNeeded = RANDOM_START_UNITS_PER_SIDE) {
     const force = [];
-    const totalNeeded = RANDOM_START_UNITS_PER_SIDE;
     let depthNorm = 0.26;
     let pool = [];
 
@@ -6830,6 +7007,7 @@ function unitColors(side) {
     const isFront = (h) => depthAt(h) >= Math.max(0.16, depthNorm - 0.08);
     const isCenter = (h) => lateralOffset(h) <= 0.20;
     const isFlank = (h) => lateralOffset(h) >= 0.30;
+    const mix = forceMixCounts(totalNeeded);
 
     function addUnits(type, count, predicates) {
       for (let i = 0; i < count; i++) {
@@ -6841,18 +7019,18 @@ function unitColors(side) {
           r: spot.r,
           side,
           type,
-          quality: 'green',
+          quality: randomQualityForType(type),
         });
       }
     }
 
-    addUnits('gen', 3, [isBack, isCenter]);
-    addUnits('run', 1, [isBack, isCenter]);
-    addUnits('iat', 1, [isBack, isCenter]);
-    addUnits('cav', 5, [isFront, isFlank]);
-    addUnits('arc', 4, [isBack, isCenter]);
-    addUnits('inf', 11, [isFront, isCenter]);
-    addUnits('skr', 5, [isFront]);
+    addUnits('gen', mix.gen, [isBack, isCenter]);
+    addUnits('run', mix.run, [isBack, isCenter]);
+    addUnits('iat', mix.iat, [isBack, isCenter]);
+    addUnits('cav', mix.cav, [isFront, isFlank]);
+    addUnits('arc', mix.arc, [isBack, isCenter]);
+    addUnits('inf', mix.inf, [isFront, isCenter]);
+    addUnits('skr', mix.skr, [isFront]);
 
     const refillTypes = ['inf', 'inf', 'inf', 'skr', 'arc', 'cav', 'iat'];
     while (force.length < totalNeeded) {
@@ -6865,26 +7043,30 @@ function unitColors(side) {
         r: spot.r,
         side,
         type,
-        quality: 'green',
+        quality: randomQualityForType(type),
       });
     }
 
-    assignGroupedForceQualities(force, side, geometry);
     return force;
   }
 
   function buildRandomStartupScenario(axis) {
+    const profile = chooseRandomStartupProfile();
     const geometry = buildAxisGeometry(axis);
     const terrainData = createRandomTerrainLayout(axis, geometry);
     const occupiedSet = new Set();
-    const blue = buildRandomForce('blue', terrainData.terrainByHex, occupiedSet, geometry);
-    const red = buildRandomForce('red', terrainData.terrainByHex, occupiedSet, geometry);
+    const blue = buildRandomForce('blue', terrainData.terrainByHex, occupiedSet, geometry, profile.blueUnits);
+    const red = buildRandomForce('red', terrainData.terrainByHex, occupiedSet, geometry, profile.redUnits);
 
     return {
       axis: normalizeForwardAxis(axis),
       terrain: terrainData.terrain,
       units: [...blue, ...red],
       advantageSide: terrainData.advantageSide,
+      size: profile.size,
+      matchup: profile.matchup,
+      blueUnits: profile.blueUnits,
+      redUnits: profile.redUnits,
     };
   }
 
@@ -6912,7 +7094,6 @@ function unitColors(side) {
       unitsSkippedOffBoard: 0,
       unitsSkippedBadType: 0,
       unitsSkippedBadSide: 0,
-      unitsSkippedCap: 0,
       unitsDuplicates: 0,
     };
 
@@ -6948,7 +7129,6 @@ function unitColors(side) {
 
     // Units
     const seenUnitHexes = new Set();
-    const sideCounts = { blue: 0, red: 0 };
     for (const u of (sc.units || [])) {
       const k = key(u.q, u.r);
       if (!board.activeSet.has(k)) {
@@ -6967,10 +7147,6 @@ function unitColors(side) {
         stats.unitsSkippedBadSide += 1;
         continue;
       }
-      if (sideCounts[u.side] >= SCENARIO_UNIT_CAP_PER_SIDE) {
-        stats.unitsSkippedCap += 1;
-        continue;
-      }
 
       const quality = normalizeQuality(u.type, u.quality || 'green');
       unitsByHex.set(k, {
@@ -6980,22 +7156,17 @@ function unitColors(side) {
         quality,
         hp: unitMaxHp(u.type, quality),
       });
-      sideCounts[u.side] += 1;
       stats.unitsPlaced += 1;
     }
 
-    log(
-      `Loaded scenario: ${name} (units=${stats.unitsPlaced}, terrain=${stats.terrainPlaced}, ` +
-      `cap=${SCENARIO_UNIT_CAP_PER_SIDE}/side).`
-    );
+    log(`Loaded scenario: ${name} (units=${stats.unitsPlaced}, terrain=${stats.terrainPlaced}).`);
 
     const skippedTotal =
       stats.terrainSkippedOffBoard +
       stats.terrainSkippedInvalidType +
       stats.unitsSkippedOffBoard +
       stats.unitsSkippedBadType +
-      stats.unitsSkippedBadSide +
-      stats.unitsSkippedCap;
+      stats.unitsSkippedBadSide;
     const duplicateTotal = stats.terrainDuplicates + stats.unitsDuplicates;
 
     if (skippedTotal > 0 || duplicateTotal > 0) {
@@ -7003,7 +7174,7 @@ function unitColors(side) {
         `Scenario warnings: skipped=${skippedTotal} ` +
         `(terrain offboard ${stats.terrainSkippedOffBoard}, terrain invalid ${stats.terrainSkippedInvalidType}, ` +
         `units offboard ${stats.unitsSkippedOffBoard}, units bad type ${stats.unitsSkippedBadType}, ` +
-        `units bad side ${stats.unitsSkippedBadSide}, units capped ${stats.unitsSkippedCap}) · duplicates=${duplicateTotal} ` +
+        `units bad side ${stats.unitsSkippedBadSide}) · duplicates=${duplicateTotal} ` +
         `(terrain ${stats.terrainDuplicates}, units ${stats.unitsDuplicates}).`
       );
     }
@@ -7055,6 +7226,7 @@ function unitColors(side) {
       state: {
         mode: state.mode,
         gameMode: state.gameMode,
+        humanSide: state.humanSide,
         aiDifficulty: state.aiDifficulty,
         forwardAxis: state.forwardAxis,
         tool: state.tool,
@@ -7141,6 +7313,9 @@ function unitColors(side) {
     const silent = !!options.silent;
     const skipAiKick = !!options.skipAiKick;
     stopAiLoop();
+    stopMoveAnimation();
+    stopActionPulse();
+    closeRulesModal();
     resetDraftState({ keepBudget: true });
 
     const resolved = resolveImportPayload(raw);
@@ -7269,11 +7444,10 @@ function unitColors(side) {
 
     // Restore state fields
     const restoreMode = (payload.mode === 'play') ? 'play' : 'edit';
-    const restoredGameMode =
-      (payload.gameMode === 'hvh' || payload.gameMode === 'hvai' || payload.gameMode === 'online')
-        ? payload.gameMode
-        : state.gameMode;
-    state.gameMode = restoredGameMode;
+    state.gameMode = (payload.gameMode === 'hvh' || payload.gameMode === 'hvai' || payload.gameMode === 'online')
+      ? payload.gameMode
+      : 'hvai';
+    state.humanSide = normalizeSide(payload.humanSide);
     state.aiDifficulty = normalizeAiDifficulty(payload.aiDifficulty);
     state.forwardAxis = normalizeForwardAxis(payload.forwardAxis);
     state.mode = restoreMode;
@@ -7404,6 +7578,18 @@ function unitColors(side) {
     maybeStartAiTurn();
   }
 
+  function maybeAutoEndTurnAfterAction() {
+    if (state.mode !== 'play') return false;
+    if (state.gameOver) return false;
+    if (isAiTurnActive()) return false;
+    if (state.selectedKey) return false;
+    if (state.actsUsed < ACT_LIMIT) return false;
+
+    log(`Actions ${ACT_LIMIT}/${ACT_LIMIT} spent. Auto-ending turn.`);
+    endTurn();
+    return true;
+  }
+
   // --- Play interaction
   function selectUnit(hexKey) {
     const u = unitsByHex.get(hexKey);
@@ -7447,6 +7633,16 @@ function unitColors(side) {
       if (healCount > 0) notes.push(`Medic can heal ${healCount} adjacent unit(s).`);
       else notes.push('Medic has no adjacent wounded ally to heal.');
     }
+    if (u.type === 'arc') {
+      const curHex = board.byKey.get(hexKey);
+      if (curHex && curHex.terrain === 'woods') {
+        if (hasAdjacentTerrain(hexKey, 'clear')) {
+          notes.push('Tree-line: ARC ranged attacks are enabled from this woods hex.');
+        } else {
+          notes.push('Deep woods: ARC ranged attacks are disabled until on a woods hex adjacent to clear.');
+        }
+      }
+    }
 
     log(`Selected ${u.side.toUpperCase()} ${def.abbrev}.${notes.length ? ' ' + notes.join(' ') : ''}`);
     updateHud();
@@ -7481,26 +7677,31 @@ function unitColors(side) {
     if (Number.isFinite(stepCost) && stepCost > 0) {
       state.act.moveSpent = (state.act.moveSpent || 0) + stepCost;
     }
+    const pathKeys = movementPathKeys(fromKey, destKey, u);
 
     unitsByHex.delete(fromKey);
     unitsByHex.set(destKey, u);
     state.selectedKey = destKey;
     state.act.moved = true;
-    startMoveAnimation(fromKey, destKey, u);
+    startMoveAnimation(pathKeys, u, isAiControlledSide(u.side));
+    startActionPulse({
+      type: 'move',
+      fromKey,
+      toKey: destKey,
+      durationMs: ACTION_PULSE_MOVE_MS,
+    });
 
     if (isPostAttackWithdraw) {
       log(`Veteran CAV disengaged to ${destKey}.`);
       clearSelection();
-      updateHud();
-      maybeAutoEndTurnAtActionLimit();
+      if (!maybeAutoEndTurnAfterAction()) updateHud();
       return;
     }
 
     if (u.type === 'iat') {
       log(`Medic moved to ${destKey}.`);
       clearSelection();
-      updateHud();
-      maybeAutoEndTurnAtActionLimit();
+      if (!maybeAutoEndTurnAfterAction()) updateHud();
       return;
     }
 
@@ -7510,13 +7711,9 @@ function unitColors(side) {
     state._moveTargets = null;
     state._attackTargets = computeAttackTargets(destKey, u);
     state._healTargets = computeHealTargets(destKey, u);
-
-    const hasFollowUpAttack = !!(state._attackTargets && state._attackTargets.size > 0);
-    const hasFollowUpHeal = !!(state._healTargets && state._healTargets.size > 0);
-    if (!hasFollowUpAttack && !hasFollowUpHeal) {
+    if (!state._attackTargets || state._attackTargets.size === 0) {
       clearSelection();
-      updateHud();
-      maybeAutoEndTurnAtActionLimit();
+      if (!maybeAutoEndTurnAfterAction()) updateHud();
       return;
     }
 
@@ -7558,8 +7755,7 @@ function unitColors(side) {
 
     log(`Medic restored 1 HP to ${target.side.toUpperCase()} ${tdef ? tdef.abbrev : target.type} (${target.hp}/${maxHp}).`);
     clearSelection();
-    updateHud();
-    maybeAutoEndTurnAtActionLimit();
+    if (!maybeAutoEndTurnAfterAction()) updateHud();
   }
 
   function attackFromSelection(targetKey) {
@@ -7592,7 +7788,12 @@ function unitColors(side) {
       state.act.committed = true;
     }
 
-    setAttackFlash(targetKey);
+    startActionPulse({
+      type: 'attack',
+      fromKey: attackerKey,
+      toKey: targetKey,
+      durationMs: ACTION_PULSE_ATTACK_MS,
+    });
     resolveAttack(attackerKey, targetKey);
 
     state.act.attacked = true;
@@ -7613,8 +7814,7 @@ function unitColors(side) {
 
     // End activation after attack.
     clearSelection();
-    updateHud();
-    maybeAutoEndTurnAtActionLimit();
+    if (!maybeAutoEndTurnAfterAction()) updateHud();
   }
 
   function passSelected() {
@@ -7634,8 +7834,7 @@ function unitColors(side) {
     log(`Pass: ${u.side.toUpperCase()} ${UNIT_BY_ID.get(u.type).abbrev}.`);
 
     clearSelection();
-    updateHud();
-    maybeAutoEndTurnAtActionLimit();
+    if (!maybeAutoEndTurnAfterAction()) updateHud();
   }
 
   function clickPlay(hexKey) {
@@ -7643,12 +7842,12 @@ function unitColors(side) {
 
     // If nothing selected: try to select.
     if (!state.selectedKey) {
+      if (state.actsUsed >= ACT_LIMIT && maybeAutoEndTurnAfterAction()) return;
       if (clickedUnit) {
         const reason = activationBlockReason(clickedUnit, hexKey);
         if (reason) {
           log(reason);
           updateHud();
-          maybeAutoEndTurnAtActionLimit();
           return;
         }
         if (unitCanActivate(clickedUnit, hexKey)) selectUnit(hexKey);
@@ -7661,7 +7860,6 @@ function unitColors(side) {
     if (!selUnit) {
       clearSelection();
       updateHud();
-      maybeAutoEndTurnAtActionLimit();
       return;
     }
 
@@ -7669,8 +7867,7 @@ function unitColors(side) {
     if (hexKey === selKey) {
       clearSelection();
       log('Deselected.');
-      updateHud();
-      maybeAutoEndTurnAtActionLimit();
+      if (!maybeAutoEndTurnAfterAction()) updateHud();
       return;
     }
 
@@ -7695,57 +7892,24 @@ function unitColors(side) {
     // Switch selection to another friendly (forfeits any optional post-move attack)
     if (clickedUnit && clickedUnit.side === state.side) {
       clearSelection();
+      if (maybeAutoEndTurnAfterAction()) return;
       const reason = activationBlockReason(clickedUnit, hexKey);
       if (reason) {
         log(reason);
         updateHud();
-        maybeAutoEndTurnAtActionLimit();
         return;
       }
       if (unitCanActivate(clickedUnit, hexKey)) selectUnit(hexKey);
-      maybeAutoEndTurnAtActionLimit();
       return;
     }
   }
 
   // --- Events
-  const TOUCH_CLICK_SUPPRESS_MS = 700;
-  let suppressCanvasClickUntil = 0;
-
-  function canvasHexFromClient(clientX, clientY) {
-    const rect = elCanvas.getBoundingClientRect();
-    const x = clientX - rect.left;
-    const y = clientY - rect.top;
-    return pickHex(x, y);
-  }
-
-  function handleCanvasHexAction(hexKey) {
-    if (!hexKey) return;
-    if (state.mode === 'edit') {
-      if (onlineModeActive() && net.connected && !net.isHost) {
-        log('Online: host controls setup and mode.');
-        updateHud();
-        return;
-      }
-      if (state.tool === 'terrain') paintTerrain(hexKey);
-      else placeOrReplaceUnit(hexKey);
-    } else {
-      if (onlineModeActive()) {
-        if (forwardOnlineAction({ type: 'click', hexKey })) return;
-      }
-      if (isAiTurnActive()) return;
-      clickPlay(hexKey);
-    }
-  }
-
-  function handleCanvasPointerAction(clientX, clientY) {
-    const h = canvasHexFromClient(clientX, clientY);
-    if (!h) return;
-    handleCanvasHexAction(h.k);
-  }
-
   elCanvas.addEventListener('mousemove', (e) => {
-    const h = canvasHexFromClient(e.clientX, e.clientY);
+    const rect = elCanvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const h = pickHex(x, y);
     state._hoverKey = h ? h.k : null;
     draw();
   });
@@ -7755,27 +7919,39 @@ function unitColors(side) {
     draw();
   });
 
-  elCanvas.addEventListener('pointerdown', (e) => {
-    if (e.pointerType === 'mouse') return;
-    if (typeof e.button === 'number' && e.button > 0) return;
-    e.preventDefault();
-    suppressCanvasClickUntil = Date.now() + TOUCH_CLICK_SUPPRESS_MS;
-    handleCanvasPointerAction(e.clientX, e.clientY);
-  });
-
   elCanvas.addEventListener('click', (e) => {
-    if (Date.now() < suppressCanvasClickUntil) return;
-    handleCanvasPointerAction(e.clientX, e.clientY);
+    const rect = elCanvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const h = pickHex(x, y);
+    if (!h) return;
+
+    if (state.mode === 'edit') {
+      if (onlineModeActive() && net.connected && !net.isHost) {
+        log('Online: host controls setup and mode.');
+        updateHud();
+        return;
+      }
+      if (state.tool === 'terrain') paintTerrain(h.k);
+      else placeOrReplaceUnit(h.k);
+    } else {
+      if (onlineModeActive()) {
+        if (forwardOnlineAction({ type: 'click', hexKey: h.k })) return;
+      }
+      if (isAiTurnActive()) return;
+      clickPlay(h.k);
+    }
   });
 
   // Keyboard: P = pass, L = line advance (with selected INF)
   window.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && isRulesModalOpen()) {
-      e.preventDefault();
-      setRulesModalOpen(false);
-      return;
+    if (e.key === 'Escape') {
+      if (elRulesModal && elRulesModal.classList.contains('open')) {
+        e.preventDefault();
+        closeRulesModal();
+        return;
+      }
     }
-    if (isRulesModalOpen()) return;
 
     if (e.key === 'p' || e.key === 'P') {
       if (state.mode === 'play' && state.selectedKey && !isAiTurnActive()) {
@@ -7812,42 +7988,6 @@ function unitColors(side) {
   });
 
   window.addEventListener('resize', resize);
-  window.addEventListener('orientationchange', resize);
-  if (window.visualViewport) {
-    window.visualViewport.addEventListener('resize', resize);
-  }
-
-  setRulesViewMode(loadRulesViewMode(), false);
-
-  if (elRulesQuickBtn) {
-    elRulesQuickBtn.addEventListener('click', () => {
-      setRulesModalOpen(true);
-    });
-  }
-  if (elRulesCloseBtn) {
-    elRulesCloseBtn.addEventListener('click', () => {
-      setRulesModalOpen(false);
-    });
-  }
-  if (elRulesModal) {
-    elRulesModal.addEventListener('click', (e) => {
-      const closeTarget = e.target && e.target.closest ? e.target.closest('[data-rules-close]') : null;
-      if (closeTarget) {
-        e.preventDefault();
-        setRulesModalOpen(false);
-      }
-    });
-  }
-  if (elRulesViewQuickBtn) {
-    elRulesViewQuickBtn.addEventListener('click', () => {
-      setRulesViewMode('quick');
-    });
-  }
-  if (elRulesViewExpandedBtn) {
-    elRulesViewExpandedBtn.addEventListener('click', () => {
-      setRulesViewMode('expanded');
-    });
-  }
 
   elModeBtn.addEventListener('click', () => {
     if (onlineModeActive() && net.connected && !net.isHost) {
@@ -7886,6 +8026,21 @@ function unitColors(side) {
     });
   }
 
+  if (elRulesShortBtn) {
+    elRulesShortBtn.addEventListener('click', () => openRulesModal('short'));
+  }
+  if (elRulesFullBtn) {
+    elRulesFullBtn.addEventListener('click', () => openRulesModal('full'));
+  }
+  if (elRulesCloseBtn) {
+    elRulesCloseBtn.addEventListener('click', closeRulesModal);
+  }
+  if (elRulesModal) {
+    elRulesModal.addEventListener('click', (e) => {
+      if (e.target === elRulesModal) closeRulesModal();
+    });
+  }
+
   if (elGameModeSel) {
     elGameModeSel.addEventListener('change', () => {
       const rawMode = elGameModeSel.value;
@@ -7898,10 +8053,10 @@ function unitColors(side) {
 
       state.gameMode = nextMode;
       if (nextMode === 'hvai') {
-        log(`Game mode: Human vs AI (Red AI, ${aiDifficultyLabel(state.aiDifficulty)}).`);
+        log(`Game mode: Human vs AI. You are ${state.humanSide.toUpperCase()}, ${aiSide().toUpperCase()} is AI (${aiDifficultyLabel()} difficulty). Blue goes first.`);
       } else if (nextMode === 'online') {
         stopAiLoop();
-        log('Game mode: Online (Host = Blue, Guest = Red). Use Online panel to connect.');
+        log('Game mode: Online (Host = Blue, Guest = Red). First side is randomized when battle starts.');
       } else {
         stopAiLoop();
         log('Game mode: Human vs Human.');
@@ -7911,12 +8066,23 @@ function unitColors(side) {
     });
   }
 
+  if (elPlayerSideSel) {
+    elPlayerSideSel.addEventListener('change', () => {
+      const nextSide = normalizeSide(elPlayerSideSel.value);
+      if (nextSide === state.humanSide) return;
+      state.humanSide = nextSide;
+      log(`Player side set to ${state.humanSide.toUpperCase()}. ${aiSide().toUpperCase()} is AI. Blue still acts first.`);
+      updateHud();
+      maybeStartAiTurn();
+    });
+  }
+
   if (elAiDifficultySel) {
     elAiDifficultySel.addEventListener('change', () => {
-      const nextDifficulty = normalizeAiDifficulty(elAiDifficultySel.value);
-      if (nextDifficulty === state.aiDifficulty) return;
-      state.aiDifficulty = nextDifficulty;
-      log(`AI difficulty: ${aiDifficultyLabel(nextDifficulty)}.`);
+      const next = normalizeAiDifficulty(elAiDifficultySel.value);
+      if (next === state.aiDifficulty) return;
+      state.aiDifficulty = next;
+      log(`AI difficulty set to ${aiDifficultyLabel()}${state.gameMode === 'hvai' ? '.' : ' (will apply in Human vs AI mode).'}`);
       updateHud();
     });
   }
@@ -7932,8 +8098,27 @@ function unitColors(side) {
     });
   }
 
-  elToolUnits.addEventListener('click', () => { state.tool = 'units'; updateHud(); });
+  elToolUnits.addEventListener('click', () => {
+    if (onlineModeActive() && net.connected && !net.isHost) {
+      log('Online: host controls setup and mode.');
+      updateHud();
+      return;
+    }
+    if (state.mode !== 'edit') {
+      enterEdit();
+    }
+    state.tool = 'units';
+    updateHud();
+  });
   elToolTerrain.addEventListener('click', () => {
+    if (onlineModeActive() && net.connected && !net.isHost) {
+      log('Online: host controls setup and mode.');
+      updateHud();
+      return;
+    }
+    if (state.mode !== 'edit') {
+      enterEdit();
+    }
     if (state.draft.active) {
       log('Custom draft locks terrain editing.');
       updateHud();
@@ -7994,6 +8179,12 @@ function unitColors(side) {
   });
 
   elVictorySel.addEventListener('change', () => {
+    if (state.mode === 'play') {
+      elVictorySel.value = state.victoryMode;
+      log('Victory condition is locked once battle starts. Use Back to Setup to change it.');
+      updateHud();
+      return;
+    }
     state.victoryMode = elVictorySel.value;
     updateHud();
   });
@@ -8009,9 +8200,15 @@ function unitColors(side) {
     });
   }
 
-  elClearUnitsBtn.addEventListener('click', () => { enterEdit(); clearUnits(); });
-
-  elLoadScenarioBtn.addEventListener('click', () => { loadScenario(elScenarioSel.value); });
+  if (elScenarioSel) {
+    elScenarioSel.addEventListener('change', () => {
+      const scenarioName = elScenarioSel.value;
+      if (!scenarioName || !SCENARIOS[scenarioName]) return;
+      const wasPlay = state.mode === 'play';
+      loadScenario(scenarioName);
+      if (wasPlay) enterPlay();
+    });
+  }
 
   if (elDraftModeSel) {
     elDraftModeSel.addEventListener('change', () => {
@@ -8182,12 +8379,10 @@ function unitColors(side) {
       opt.selected = true;
       elScenarioSel.appendChild(opt);
       elScenarioSel.disabled = true;
-      elLoadScenarioBtn.disabled = true;
       return;
     }
 
     elScenarioSel.disabled = false;
-    elLoadScenarioBtn.disabled = false;
 
     if (prev && [...elScenarioSel.options].some(o => o.value === prev)) {
       elScenarioSel.value = prev;
@@ -8219,7 +8414,6 @@ function unitColors(side) {
   }
 
   function boot() {
-    initPanelCollapseControls();
     resetDraftState({ keepBudget: false });
     populateScenarioFilters();
     populateVictorySelect();
@@ -8236,14 +8430,18 @@ function unitColors(side) {
     enterPlay();
 
     const biasLabel = (randomScenario.advantageSide === 'none')
-      ? 'balanced'
-      : `${randomScenario.advantageSide} flank bias`;
+      ? 'balanced terrain'
+      : `${randomScenario.advantageSide} flank-terrain bias`;
+    const matchupLabel =
+      randomScenario.matchup === 'even'
+        ? 'even forces'
+        : (randomScenario.matchup === 'blue_advantage' ? 'blue-advantaged forces' : 'red-advantaged forces');
 
     log(
-      `Booted ${GAME_NAME}. Randomized startup loaded ` +
-      `(units=${randomScenario.units.length}, terrain=${randomScenario.terrain.length}, ` +
-      `axis=${forwardAxisLabel(randomScenario.axis)}, ${biasLabel}). ` +
-      `Started in Play mode.`
+      `Booted ${GAME_NAME}. Randomized startup loaded and battle started ` +
+      `(${randomScenario.size} battle, ${matchupLabel}, ` +
+      `B ${randomScenario.blueUnits} / R ${randomScenario.redUnits}, ` +
+      `terrain=${randomScenario.terrain.length}, axis=${forwardAxisLabel(randomScenario.axis)}, ${biasLabel}).`
     );
     updateHud();
     resize();
