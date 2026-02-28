@@ -3120,13 +3120,19 @@
     const rows = (board.maxR - board.minR + 1);
     const availW = rect.width;
     const availH = rect.height;
+    const compactLayout = window.matchMedia('(max-width: 980px)').matches;
+    const fitPad = compactLayout ? 10 : 18;
+    const fitW = Math.max(40, availW - (fitPad * 2));
+    const fitH = Math.max(40, availH - (fitPad * 2));
 
     // For pointy-top hexes with odd-r offset:
     // width ≈ sqrt(3)*R*(cols + 0.5)
     // height ≈ R*((rows-1)*1.5 + 2)
-    const rByW = availW / (Math.sqrt(3) * (cols + 0.5));
-    const rByH = availH / (((rows - 1) * 1.5) + 2);
-    R = Math.max(18, Math.min(42, Math.floor(Math.min(rByW, rByH))));
+    const rByW = fitW / (Math.sqrt(3) * (cols + 0.5));
+    const rByH = fitH / (((rows - 1) * 1.5) + 2);
+    const minR = compactLayout ? 9 : 18;
+    const maxR = compactLayout ? 38 : 42;
+    R = Math.max(minR, Math.min(maxR, Math.floor(Math.min(rByW, rByH))));
 
     HEX_W = Math.sqrt(3) * R;
     HEX_H = 2 * R;
