@@ -6616,18 +6616,30 @@ function unitColors(side) {
     return pool.splice(idx, 1)[0] || null;
   }
 
-  function pickPreferredHex(pool, predicates) {
+  function pickPreferredHex(pool, predicates, acceptFn = null) {
     if (!Array.isArray(pool) || pool.length === 0) return null;
     for (const pred of predicates || []) {
       if (typeof pred !== 'function') continue;
       const hits = [];
       for (let i = 0; i < pool.length; i++) {
-        if (pred(pool[i])) hits.push(i);
+        const okByAccept = (typeof acceptFn !== 'function') || !!acceptFn(pool[i]);
+        if (okByAccept && pred(pool[i])) hits.push(i);
       }
       if (hits.length > 0) {
         const chosenIdx = hits[randInt(0, hits.length - 1)];
         return pool.splice(chosenIdx, 1)[0] || null;
       }
+    }
+    if (typeof acceptFn === 'function') {
+      const acceptable = [];
+      for (let i = 0; i < pool.length; i++) {
+        if (acceptFn(pool[i])) acceptable.push(i);
+      }
+      if (acceptable.length > 0) {
+        const chosenIdx = acceptable[randInt(0, acceptable.length - 1)];
+        return pool.splice(chosenIdx, 1)[0] || null;
+      }
+      return null;
     }
     return pullRandomFromPool(pool);
   }
@@ -7015,9 +7027,23 @@ function unitColors(side) {
     const isFlank = (h) => lateralOffset(h) >= 0.30;
     const mix = forceMixCounts(totalNeeded);
 
+    function spawnHexHasExit(spot, type, quality) {
+      if (!spot) return false;
+      const mp = unitMovePoints({ type, quality });
+      if (!Number.isFinite(mp) || mp <= 0) return false;
+      for (const nk of spot.neigh || []) {
+        if (!board.activeSet.has(nk)) continue;
+        const terrainId = terrainByHex.get(nk) || 'clear';
+        const stepCost = terrainMoveCost(type, terrainId);
+        if (Number.isFinite(stepCost) && stepCost <= mp) return true;
+      }
+      return false;
+    }
+
     function addUnits(type, count, predicates) {
       for (let i = 0; i < count; i++) {
-        const spot = pickPreferredHex(pool, predicates);
+        const quality = randomQualityForType(type);
+        const spot = pickPreferredHex(pool, predicates, (h) => spawnHexHasExit(h, type, quality));
         if (!spot) break;
         occupiedSet.add(spot.k);
         force.push({
@@ -7025,7 +7051,7 @@ function unitColors(side) {
           r: spot.r,
           side,
           type,
-          quality: randomQualityForType(type),
+          quality,
         });
       }
     }
@@ -7040,16 +7066,17 @@ function unitColors(side) {
 
     const refillTypes = ['inf', 'inf', 'inf', 'skr', 'arc', 'cav', 'iat'];
     while (force.length < totalNeeded) {
-      const spot = pullRandomFromPool(pool);
-      if (!spot) break;
       const type = refillTypes[randInt(0, refillTypes.length - 1)];
+      const quality = randomQualityForType(type);
+      const spot = pickPreferredHex(pool, null, (h) => spawnHexHasExit(h, type, quality));
+      if (!spot) break;
       occupiedSet.add(spot.k);
       force.push({
         q: spot.q,
         r: spot.r,
         side,
         type,
-        quality: randomQualityForType(type),
+        quality,
       });
     }
 
