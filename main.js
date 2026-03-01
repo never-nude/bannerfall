@@ -542,7 +542,7 @@
       <li>MED HP 1/1/1, UP 4</li>
     </ul>
     <h4>Terrain And Friction</h4>
-    <p>Terrain defines lanes and tempo. Clear costs 1 move for all units. INF enters Woods/Hills/Rough at cost 1 (and entering a Hill ends further movement that activation; INF also pauses next turn after entering Woods/Hills/Rough). SKR enters Woods at cost 2 and enters Hills/Rough at cost 1; SKR are not slowed by Hills. ARC enters Woods/Hills/Rough at cost 1 (entering a Hill ends further movement that activation; entering Woods still causes next-turn pause). GEN enters Hills/Rough at cost 2 (entering a Hill ends further movement that activation). CAV enters Woods/Hills/Rough at cost 2 and must pause next turn after entering any of those terrains. RUN enters Woods/Hills one hex at a time and enters Rough normally but still pauses next turn after entering Rough. MED can only enter Woods among difficult terrain, and pauses next turn after entering Woods. Water is impassable for all units.</p>
+    <p>Terrain defines lanes and tempo. Clear costs 1 move for all units. In Woods, INF/ARC/MED/CAV pause next turn after each woods entry; RUN/SKR/GEN move one woods hex per activation and do not take woods pause. INF enters Hills/Rough at cost 1 (entering a Hill ends further movement that activation). ARC enters Hills/Rough at cost 1 (entering a Hill ends further movement that activation). GEN enters Hills/Rough at cost 2 (entering a Hill ends further movement that activation). SKR enters Woods at cost 2 and enters Hills/Rough at cost 1; SKR are not slowed by Hills. CAV enters Woods/Rough at cost 2 and pauses next turn after those entries, but CAV cannot climb onto Hills unless already starting from a Hill hex. RUN enters Woods/Hills one hex at a time and enters Rough normally but still pauses next turn after entering Rough. MED can only enter Woods among difficult terrain, and pauses next turn after entering Woods. Water is impassable for all units.</p>
     <p>Woods provide defense: attacker rolls -1 die (minimum 1). Archers and skirmishers in Woods can only fire if their woods hex is adjacent to Clear (tree-line fire). ARC/SKR defending from tree-line also give attacker -1 die. ARC/SKR defending on Hills give attacker -1 die. ARC/SKR attacking from Hills gain +1 ranged die (no range increase). Any attack launched from Rough suffers -1 die.</p>
     <h4>Command System</h4>
     <p>Most units need command coverage to function fully. General radius: Green 3, Regular 4, Veteran 5. Runner relay radius: 1.</p>
@@ -5915,6 +5915,13 @@ function unitColors(side) {
     return unitType === 'inf' || unitType === 'arc' || unitType === 'gen';
   }
 
+  function canEnterTerrainFrom(unitType, fromTerrainId, toTerrainId) {
+    if (toTerrainId === 'water') return false;
+    // Cavalry can only be on hills if they already started the step on hills.
+    if (unitType === 'cav' && toTerrainId === 'hills' && fromTerrainId !== 'hills') return false;
+    return true;
+  }
+
   function unitMoveIsPausedThisTurn(unit) {
     if (!unit) return false;
     const until = Number(unit.movePauseUntilTurn || 0);
@@ -6087,6 +6094,7 @@ function unitColors(side) {
       const nh = board.byKey.get(nk);
       if (!nh) continue;
 
+      if (!canEnterTerrainFrom(u.type, h.terrain, nh.terrain)) continue;
       const cost = terrainMoveCost(u.type, nh.terrain);
       if (!Number.isFinite(cost) || cost > mp) continue;
 
@@ -6161,6 +6169,7 @@ function unitColors(side) {
         if (isOccupied(nk)) continue;
         const nh = board.byKey.get(nk);
         if (!nh) continue;
+        if (!canEnterTerrainFrom(u.type, h.terrain, nh.terrain)) continue;
 
         const stepCost = terrainMoveCost(u.type, nh.terrain);
         if (!Number.isFinite(stepCost)) continue; // water/impassable
@@ -6213,6 +6222,7 @@ function unitColors(side) {
         if (isOccupied(nk) && nk !== toKey) continue;
         const nh = board.byKey.get(nk);
         if (!nh) continue;
+        if (!canEnterTerrainFrom(unit.type, h.terrain, nh.terrain)) continue;
 
         const stepCost = terrainMoveCost(unit.type, nh.terrain);
         if (!Number.isFinite(stepCost)) continue;
@@ -6265,6 +6275,7 @@ function unitColors(side) {
         if (isOccupied(nk) && nk !== toKey) continue;
         const nh = board.byKey.get(nk);
         if (!nh) continue;
+        if (!canEnterTerrainFrom(unit.type, h.terrain, nh.terrain)) continue;
 
         const stepCost = terrainMoveCost(unit.type, nh.terrain);
         if (!Number.isFinite(stepCost)) continue;
@@ -6735,6 +6746,7 @@ function unitColors(side) {
       if (isOccupied(nk)) continue;
       const nh = board.byKey.get(nk);
       if (!nh) continue;
+      if (!canEnterTerrainFrom(u.type, h.terrain, nh.terrain)) continue;
 
       const cost = terrainMoveCost(u.type, nh.terrain);
       if (!Number.isFinite(cost) || cost > remainingMp) continue;
@@ -6881,6 +6893,7 @@ function unitColors(side) {
 
     const aHex = board.byKey.get(attackerKey);
     const dHex = board.byKey.get(defenderKey);
+    const defU = unitsByHex.get(defenderKey);
     if (!aHex || !dHex) return null;
 
     const curDist = axialDistance(aHex.q, aHex.r, dHex.q, dHex.r);
@@ -6909,6 +6922,7 @@ function unitColors(side) {
     if (!bh) return null;
 
     if (bh.terrain === 'water') return null;
+    if (defU && !canEnterTerrainFrom(defU.type, dHex.terrain, bh.terrain)) return null;
     if (isOccupied(bestKey)) return null;
 
     return bestKey;
@@ -7708,6 +7722,8 @@ function unitColors(side) {
       const nh = board.byKey.get(nk);
       if (!nh) continue;
       const nTerrain = terrainAtForLayout(nk, terrainByHex);
+      const fromTerrain = terrainAtForLayout(hex.k, terrainByHex);
+      if (!canEnterTerrainFrom(type, fromTerrain, nTerrain)) continue;
       const stepCost = terrainMoveCost(type, nTerrain);
       if (Number.isFinite(stepCost) && stepCost <= mp) return true;
     }

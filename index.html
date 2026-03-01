@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="style.css?v=20260301-agamemnon-v25" />
+  <link rel="stylesheet" href="style.css?v=20260301-agamemnon-v26" />
 </head>
 <body>
   <header id="hud">
@@ -32,12 +32,12 @@
           <div class="quickLegend">All HP and UP values are listed in <strong>Green / Regular / Veteran</strong> order.</div>
           <div class="quickUnitList">
             <div class="quickUnit"><span class="uType">Infantry</span><span class="uStat">Move 1</span><span class="uStat">HP 3/4/5</span><span class="uStat">UP 3/5/7</span><span class="uAtk">Front line. Melee: 2 dice. Entering hills ends movement; woods/hills/rough also apply next-turn pause.</span></div>
-            <div class="quickUnit"><span class="uType">Cavalry</span><span class="uStat">Move 2</span><span class="uStat">HP 2/3/4</span><span class="uStat">UP 6/8/10</span><span class="uAtk">Shock arm. Melee: 3 dice. Can enter woods/hills/rough but pauses after entry.</span></div>
-            <div class="quickUnit"><span class="uType">Skirmisher</span><span class="uStat">Move 2</span><span class="uStat">HP 1/2/3</span><span class="uStat">UP 2/3/4</span><span class="uAtk">Screen unit. Melee: 1 die. Ranged: 1 die at 2 hexes. Hills do not slow skirmishers.</span></div>
-            <div class="quickUnit"><span class="uType">Archer</span><span class="uStat">Move 1</span><span class="uStat">HP 1/2/3</span><span class="uStat">UP 2/4/6</span><span class="uAtk">Ranged pressure. Melee: 1 die. Ranged: 2 dice at 2 hexes, 1 die at 3. Entering hills ends movement.</span></div>
-            <div class="quickUnit"><span class="uType">General</span><span class="uStat">Move 2</span><span class="uStat">HP 2/3/4</span><span class="uStat">UP 8/10/12</span><span class="uAtk">Command anchor. Melee: 1 die. Sets command radius. Entering hills ends movement.</span></div>
-            <div class="quickUnit"><span class="uType">Runner</span><span class="uStat">Move 3/4/5</span><span class="uStat">HP 2/2/2</span><span class="uStat">UP 1/2/3</span><span class="uAtk">No attack. Carries command relay (radius 1).</span></div>
-            <div class="quickUnit"><span class="uType">Medic</span><span class="uStat">Move 1</span><span class="uStat">HP 1/1/1</span><span class="uStat">UP 4/4/4</span><span class="uAtk">No attack. Heals +1 HP to one adjacent ally.</span></div>
+            <div class="quickUnit"><span class="uType">Cavalry</span><span class="uStat">Move 2</span><span class="uStat">HP 2/3/4</span><span class="uStat">UP 6/8/10</span><span class="uAtk">Shock arm. Melee: 3 dice. Woods/rough entries cause next-turn pause. Cannot climb hills unless already on hills.</span></div>
+            <div class="quickUnit"><span class="uType">Skirmisher</span><span class="uStat">Move 2</span><span class="uStat">HP 1/2/3</span><span class="uStat">UP 2/3/4</span><span class="uAtk">Screen unit. Melee: 1 die. Ranged: 1 die at 2 hexes. Woods: one hex per activation. Hills: full speed.</span></div>
+            <div class="quickUnit"><span class="uType">Archer</span><span class="uStat">Move 1</span><span class="uStat">HP 1/2/3</span><span class="uStat">UP 2/4/6</span><span class="uAtk">Ranged pressure. Melee: 1 die. Ranged: 2 dice at 2 hexes, 1 die at 3. Woods entry causes next-turn pause; entering hills ends movement.</span></div>
+            <div class="quickUnit"><span class="uType">General</span><span class="uStat">Move 2</span><span class="uStat">HP 2/3/4</span><span class="uStat">UP 8/10/12</span><span class="uAtk">Command anchor. Melee: 1 die. Sets command radius. Woods: one hex per activation.</span></div>
+            <div class="quickUnit"><span class="uType">Runner</span><span class="uStat">Move 3/4/5</span><span class="uStat">HP 2/2/2</span><span class="uStat">UP 1/2/3</span><span class="uAtk">No attack. Carries command relay (radius 1). Woods/hills: one hex per activation.</span></div>
+            <div class="quickUnit"><span class="uType">Medic</span><span class="uStat">Move 1</span><span class="uStat">HP 1/1/1</span><span class="uStat">UP 4/4/4</span><span class="uAtk">No attack. Heals +1 HP to one adjacent ally. Woods entry causes next-turn pause.</span></div>
           </div>
           <div class="quickSheetNote">Dice: 5-6 hit, 4 retreat, 1-3 miss. Defender modifiers can reduce attacker dice, but attacks always roll at least 1 die. Open Rules for full detail.</div>
           <div class="referenceSubhead">Terrain Guide</div>
@@ -49,12 +49,12 @@
             </div>
             <div class="terrainGuideCard">
               <div class="terrainName">Woods</div>
-              <div class="terrainLine"><span class="terrainLineLabel">Move:</span> Infantry, archers, runners, and medics move normally. Skirmishers and generals are slower. Cavalry can enter at cost 2 and pauses next turn.</div>
+              <div class="terrainLine"><span class="terrainLineLabel">Move:</span> INF/ARC/MED/CAV: entering woods applies next-turn pause. RUN/SKR/GEN: one woods hex per activation (no woods pause).</div>
               <div class="terrainLine"><span class="terrainLineLabel">Combat:</span> Defender applies attacker −1 die. Archers and skirmishers can fire only from woods that touch clear hexes (tree-line).</div>
             </div>
             <div class="terrainGuideCard">
               <div class="terrainName">Hills</div>
-              <div class="terrainLine"><span class="terrainLineLabel">Move:</span> Infantry and archers can climb, but entering a hill ends movement. Generals can climb at cost 2, and entering a hill also ends movement. Skirmishers climb at full speed. Runners move one hill hex per activation. Cavalry can enter at cost 2 and pauses next turn. Medics cannot enter.</div>
+              <div class="terrainLine"><span class="terrainLineLabel">Move:</span> INF/ARC/GEN can climb, but entering hills ends movement. SKR climb at full speed. RUN move one hill hex per activation. CAV cannot climb onto hills unless already starting on hills. MED cannot enter.</div>
               <div class="terrainLine"><span class="terrainLineLabel">Combat:</span> Archers/skirmishers on hills gain +1 ranged die. Attacking those units on hills gives attacker −1 die.</div>
             </div>
             <div class="terrainGuideCard">
@@ -235,7 +235,7 @@
   </div>
 
   <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
-  <script src="build.js?v=20260301-agamemnon-v25"></script>
-  <script src="main.js?v=20260301-agamemnon-v25"></script>
+  <script src="build.js?v=20260301-agamemnon-v26"></script>
+  <script src="main.js?v=20260301-agamemnon-v26"></script>
 </body>
 </html>
