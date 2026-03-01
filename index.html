@@ -4,13 +4,19 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Bannerfall</title>
-  <link rel="stylesheet" href="style.css?v=20260223-215506" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css?v=20260301-agamemnon-v25" />
 </head>
 <body>
   <header id="hud">
     <div id="hudTitle">Bannerfall</div>
     <div id="hudMeta">…</div>
     <div id="hudLast">…</div>
+    <div id="hudActions">
+      <button id="rulesOpenBtn" class="btn hudRulesBtn">Rules</button>
+    </div>
   </header>
 
   <main id="layout">
@@ -19,93 +25,217 @@
     </section>
 
     <aside id="side">
-      <div class="panel">
-        <div class="row">
-          <div class="label">Mode</div>
-          <button id="modeBtn" class="btn">To Play</button>
-        </div>
-
-        <div class="row">
-          <div class="label">Tool</div>
-          <button id="toolUnits" class="btn">Units</button>
-          <button id="toolTerrain" class="btn">Terrain</button>
-        </div>
-
-        <div class="row">
-          <div class="label">Victory</div>
-          <select id="victorySel" class="select"></select>
-        </div>
-
-        <div class="row">
-          <button id="endTurnBtn" class="btn wide">End Turn</button>
-        </div>
-      </div>
-
-      <div class="panel">
-        <div class="row">
-          <div class="label">Scenario</div>
-          <select id="scenarioSel" class="select"></select>
-        </div>
-        <div class="row">
-          <button id="loadScenarioBtn" class="btn wide">Load Scenario</button>
-          <button id="clearUnitsBtn" class="btn wide">Clear Units</button>
-        </div>
-      </div>
-
-      <div class="panel">
-        <div class="row">
-          <div class="label">Side</div>
-          <button id="sideBlue" class="btn">Blue</button>
-          <button id="sideRed" class="btn">Red</button>
-        </div>
-
-        <div class="row">
-          <div class="label">Type</div>
-          <div id="typeBtns" class="btnGrid">
-            <button class="btn" data-type="inf">INF</button>
-            <button class="btn" data-type="cav">CAV</button>
-            <button class="btn" data-type="skr">SKR</button>
-            <button class="btn" data-type="arc">ARC</button>
-            <button class="btn" data-type="gen">GEN</button>
+      <section id="fieldRefPanel" class="panel fieldRefPanel">
+        <div class="panelTitle">Field Reference</div>
+        <div class="fieldRefBody">
+          <div class="referenceSubhead">Unit Quick Sheet</div>
+          <div class="quickLegend">All HP and UP values are listed in <strong>Green / Regular / Veteran</strong> order.</div>
+          <div class="quickUnitList">
+            <div class="quickUnit"><span class="uType">Infantry</span><span class="uStat">Move 1</span><span class="uStat">HP 3/4/5</span><span class="uStat">UP 3/5/7</span><span class="uAtk">Front line. Melee: 2 dice. Entering hills ends movement; woods/hills/rough also apply next-turn pause.</span></div>
+            <div class="quickUnit"><span class="uType">Cavalry</span><span class="uStat">Move 2</span><span class="uStat">HP 2/3/4</span><span class="uStat">UP 6/8/10</span><span class="uAtk">Shock arm. Melee: 3 dice. Can enter woods/hills/rough but pauses after entry.</span></div>
+            <div class="quickUnit"><span class="uType">Skirmisher</span><span class="uStat">Move 2</span><span class="uStat">HP 1/2/3</span><span class="uStat">UP 2/3/4</span><span class="uAtk">Screen unit. Melee: 1 die. Ranged: 1 die at 2 hexes. Hills do not slow skirmishers.</span></div>
+            <div class="quickUnit"><span class="uType">Archer</span><span class="uStat">Move 1</span><span class="uStat">HP 1/2/3</span><span class="uStat">UP 2/4/6</span><span class="uAtk">Ranged pressure. Melee: 1 die. Ranged: 2 dice at 2 hexes, 1 die at 3. Entering hills ends movement.</span></div>
+            <div class="quickUnit"><span class="uType">General</span><span class="uStat">Move 2</span><span class="uStat">HP 2/3/4</span><span class="uStat">UP 8/10/12</span><span class="uAtk">Command anchor. Melee: 1 die. Sets command radius. Entering hills ends movement.</span></div>
+            <div class="quickUnit"><span class="uType">Runner</span><span class="uStat">Move 3/4/5</span><span class="uStat">HP 2/2/2</span><span class="uStat">UP 1/2/3</span><span class="uAtk">No attack. Carries command relay (radius 1).</span></div>
+            <div class="quickUnit"><span class="uType">Medic</span><span class="uStat">Move 1</span><span class="uStat">HP 1/1/1</span><span class="uStat">UP 4/4/4</span><span class="uAtk">No attack. Heals +1 HP to one adjacent ally.</span></div>
+          </div>
+          <div class="quickSheetNote">Dice: 5-6 hit, 4 retreat, 1-3 miss. Defender modifiers can reduce attacker dice, but attacks always roll at least 1 die. Open Rules for full detail.</div>
+          <div class="referenceSubhead">Terrain Guide</div>
+          <div class="terrainGuideList">
+            <div class="terrainGuideCard">
+              <div class="terrainName">Clear</div>
+              <div class="terrainLine"><span class="terrainLineLabel">Move:</span> All units cost 1.</div>
+              <div class="terrainLine"><span class="terrainLineLabel">Combat:</span> No direct combat modifier.</div>
+            </div>
+            <div class="terrainGuideCard">
+              <div class="terrainName">Woods</div>
+              <div class="terrainLine"><span class="terrainLineLabel">Move:</span> Infantry, archers, runners, and medics move normally. Skirmishers and generals are slower. Cavalry can enter at cost 2 and pauses next turn.</div>
+              <div class="terrainLine"><span class="terrainLineLabel">Combat:</span> Defender applies attacker −1 die. Archers and skirmishers can fire only from woods that touch clear hexes (tree-line).</div>
+            </div>
+            <div class="terrainGuideCard">
+              <div class="terrainName">Hills</div>
+              <div class="terrainLine"><span class="terrainLineLabel">Move:</span> Infantry and archers can climb, but entering a hill ends movement. Generals can climb at cost 2, and entering a hill also ends movement. Skirmishers climb at full speed. Runners move one hill hex per activation. Cavalry can enter at cost 2 and pauses next turn. Medics cannot enter.</div>
+              <div class="terrainLine"><span class="terrainLineLabel">Combat:</span> Archers/skirmishers on hills gain +1 ranged die. Attacking those units on hills gives attacker −1 die.</div>
+            </div>
+            <div class="terrainGuideCard">
+              <div class="terrainName">Rough</div>
+              <div class="terrainLine"><span class="terrainLineLabel">Move:</span> Most units can enter. Cavalry and generals are slower, and all units that enter rough pause next turn. Medics cannot enter.</div>
+              <div class="terrainLine"><span class="terrainLineLabel">Combat:</span> Any attack launched from rough is −1 die. Entering rough applies next-turn movement pause.</div>
+            </div>
+            <div class="terrainGuideCard">
+              <div class="terrainName">Water</div>
+              <div class="terrainLine"><span class="terrainLineLabel">Move:</span> Impassable.</div>
+              <div class="terrainLine"><span class="terrainLineLabel">Combat:</span> Cannot enter.</div>
+            </div>
           </div>
         </div>
-
-        <div class="row">
-          <button id="eraseBtn" class="btn wide">Erase</button>
-        </div>
-
-        <div class="row">
-          <div class="label">Quality</div>
-          <button id="qGreen" class="btn">Green</button>
-          <button id="qRegular" class="btn">Regular</button>
-          <button id="qVeteran" class="btn">Veteran</button>
-        </div>
-
-        <div class="row">
-          <div class="label">Terrain</div>
-          <div id="terrainBtns" class="btnGrid">
-            <button class="btn" data-terrain="clear">Clear</button>
-            <button class="btn" data-terrain="hills">Hills</button>
-            <button class="btn" data-terrain="woods">Woods</button>
-            <button class="btn" data-terrain="rough">Rough</button>
-            <button class="btn" data-terrain="water">Water</button>
-          </div>
-        </div>
-
-        <div class="note">
-          In <b>Edit</b>: click hex to place units or paint terrain. In <b>Play</b>: click a friendly unit to show move (blue) + attack (red).<br><br>
-          Activations: <b>3</b> per turn. Each unit may activate at most once per turn.<br>
-          Command: within <b>3</b> hexes of a friendly <b>GEN</b>. Green out-of-command can't act; Regular out-of-command can't move.<br>
-          Engaged (adjacent) units can't move; <b>SKR</b> may disengage 1 hex to a hex not adjacent to any enemy.<br><br>
-          Dice: <b>5–6</b> = Hit, <b>4</b> = Retreat (blocked retreat → 1 hit). Woods: defender reduces attacker dice by 1 (min 1).<br>
-          Pass: press <b>P</b> with a selected unit.<br>
-          UI: spent units are dim. Green out-of-command units show a dashed orange ring. Toggle command radius with <b>C</b>.
-        </div>
-      </div>
+      </section>
     </aside>
   </main>
 
-  <script src="build.js?v=20260223-215506"></script>
-  <script src="main.js?v=20260223-215506"></script>
+  <section id="diceStrip" aria-live="polite">
+    <div id="floatingDice">
+      <div id="physicalDiceRow" class="physicalDiceRow">
+        <span class="physicalDiceEmpty">No dice yet.</span>
+      </div>
+      <div id="dicePerDie" class="combatMeta dicePerDie"></div>
+    </div>
+  </section>
+
+  <section id="combatRail" aria-live="polite">
+    <div class="combatCol combatColUnit">
+      <div class="combatColTitle">Selected Unit</div>
+      <div id="inspectorTitle" class="unitCardTitle">No unit selected.</div>
+      <div id="inspectorMeta" class="unitCardMeta">Click a unit to view details.</div>
+      <div class="unitInfoGrid">
+        <div class="unitKey">Type</div><div id="inspectorType" class="unitVal">-</div>
+        <div class="unitKey">Side</div><div id="inspectorSide" class="unitVal">-</div>
+        <div class="unitKey">Size</div><div id="inspectorQuality" class="unitVal">-</div>
+        <div class="unitKey">HP</div><div id="inspectorHp" class="unitVal">-</div>
+        <div class="unitKey">UP</div><div id="inspectorUp" class="unitVal">-</div>
+        <div class="unitKey">Move</div><div id="inspectorMove" class="unitVal">-</div>
+        <div class="unitKey">Attack</div><div id="inspectorAttack" class="unitVal">-</div>
+      </div>
+    </div>
+    <div id="turnOrdersPanel" class="combatCol combatColTurn">
+      <div class="combatColTitle">Turn & Orders</div>
+      <div class="row">
+        <div class="label">Mode</div>
+        <button id="modeBtn" class="btn">To Play</button>
+      </div>
+      <div class="row">
+        <div class="label">Game</div>
+        <select id="gameModeSel" class="select">
+          <option value="hvh">Human vs Human</option>
+          <option value="hvai" selected>Human vs AI</option>
+          <option value="online">Online (Host/Guest)</option>
+        </select>
+      </div>
+      <div class="row">
+        <div class="label">Play As</div>
+        <select id="playerSideSel" class="select">
+          <option value="blue">Blue</option>
+          <option value="red">Red</option>
+        </select>
+      </div>
+      <div class="row">
+        <div class="label">Difficulty</div>
+        <select id="aiDifficultySel" class="select">
+          <option value="levy">Levy (Easy)</option>
+          <option value="cohort">Cohort (Standard)</option>
+          <option value="legion">Legion (Hard)</option>
+        </select>
+      </div>
+      <div class="row">
+        <div class="label">Victory</div>
+        <select id="victorySel" class="select"></select>
+      </div>
+      <div class="row">
+        <button id="endTurnBtn" class="btn wide">End Turn</button>
+      </div>
+    </div>
+    <div class="combatCol combatColOutcome">
+      <div class="combatColTitle">Scenario</div>
+      <select id="scenarioSel" class="select scenarioSelect"></select>
+      <div class="combatColTitle scenarioDirTitle">Line Advance Direction</div>
+      <select id="lineAdvanceDirSel" class="select lineDirSel scenarioDirSelect"></select>
+      <button id="lineAdvanceBtn" class="btn wide scenarioLineAdvanceBtn">Line Advance</button>
+      <div class="combatColTitle">Victory Track</div>
+      <div id="forceTotals" class="forceTotals">Score (UP / HP): Blue - / - · Red - / -</div>
+      <div id="victoryTrackBody" class="victoryTrackBody">Victory: -</div>
+    </div>
+    <div id="editorToolsRail" class="combatCol combatColEditor editorOnly">
+      <div class="combatColTitle">Editor Tools</div>
+      <div class="row">
+        <button id="toolUnits" class="btn">Units</button>
+        <button id="toolTerrain" class="btn">Terrain</button>
+        <button id="eraseBtn" class="btn">Erase</button>
+      </div>
+      <div class="row">
+        <div class="label">Side</div>
+        <button id="sideBlue" class="btn">Blue</button>
+        <button id="sideRed" class="btn">Red</button>
+      </div>
+      <div class="row">
+        <div class="label">Type</div>
+        <div id="typeBtns" class="btnGrid">
+          <button class="btn" data-type="inf">Infantry</button>
+          <button class="btn" data-type="cav">Cavalry</button>
+          <button class="btn" data-type="skr">Skirmisher</button>
+          <button class="btn" data-type="arc">Archer</button>
+          <button class="btn" data-type="gen">General</button>
+          <button class="btn" data-type="run">Runner</button>
+          <button class="btn" data-type="iat">Medic</button>
+        </div>
+      </div>
+      <div class="row">
+        <div class="label">Quality</div>
+        <button id="qGreen" class="btn">Green</button>
+        <button id="qRegular" class="btn">Regular</button>
+        <button id="qVeteran" class="btn">Veteran</button>
+      </div>
+      <div class="row">
+        <div class="label">Terrain</div>
+        <div id="terrainBtns" class="btnGrid">
+          <button class="btn" data-terrain="clear">Clear</button>
+          <button class="btn" data-terrain="hills">Hills</button>
+          <button class="btn" data-terrain="woods">Woods</button>
+          <button class="btn" data-terrain="rough">Rough</button>
+          <button class="btn" data-terrain="water">Water</button>
+        </div>
+      </div>
+    </div>
+    <div class="combatCol combatColOnline">
+      <div class="combatColTitle">Online Multiplayer</div>
+      <div class="onlineRow">
+        <div class="onlineLabel">Room</div>
+        <button id="onlineHostBtn" class="btn wide">Create Room</button>
+        <button id="onlineLeaveBtn" class="btn">Leave</button>
+      </div>
+      <div class="onlineRow">
+        <div class="onlineLabel">Code</div>
+        <div id="onlineMyCode" class="monoVal roomCode empty">----</div>
+      </div>
+      <div class="onlineRow">
+        <div class="onlineLabel">Join</div>
+        <input id="onlineJoinCode" class="input" type="text" maxlength="4" autocomplete="off" spellcheck="false" placeholder="Enter code" />
+        <button id="onlineJoinBtn" class="btn">Connect</button>
+      </div>
+      <div class="onlineRow">
+        <div class="onlineLabel">Draft</div>
+        <select id="draftModeSel" class="select">
+          <option value="off">Off</option>
+          <option value="visible">Visible Placement</option>
+          <option value="fog">Hidden Placement (Reveal)</option>
+        </select>
+      </div>
+      <div class="onlineRow">
+        <div class="onlineLabel">UP</div>
+        <input id="draftBudgetInput" class="input" type="number" min="20" max="300" step="5" value="120" />
+      </div>
+      <div class="onlineDraftBtns">
+        <button id="startDraftBtn" class="btn wide">Start Draft</button>
+        <button id="draftDoneBtn" class="btn wide">Done For Side</button>
+      </div>
+      <div id="draftStatus" class="draftStatus"></div>
+      <div id="onlineRoleHint" class="note"></div>
+      <div id="onlineStatus" class="note"></div>
+      <input id="stateFileInput" type="file" accept=".json,application/json" hidden />
+    </div>
+  </section>
+
+  <div id="rulesModal" class="rulesModal" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="rulesModalTitle">
+    <div class="rulesCard">
+      <div class="rulesHead">
+        <div id="rulesModalTitle" class="rulesModalTitle">Rules</div>
+        <button id="rulesCloseBtn" class="btn rulesCloseBtn">Close</button>
+      </div>
+      <div id="rulesModalBody" class="rulesModalBody"></div>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+  <script src="build.js?v=20260301-agamemnon-v25"></script>
+  <script src="main.js?v=20260301-agamemnon-v25"></script>
 </body>
 </html>
